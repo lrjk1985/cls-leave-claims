@@ -106,6 +106,23 @@ test("nextLeaveYearBalance carries forward unused leave into the new year", () =
   });
 });
 
+test("nextLeaveYearBalance keeps manually set annual leave as the base", () => {
+  const user = {
+    id: "u1",
+    startingLeaveEntitlement: 24,
+    serviceStartDate: "2020-01-01",
+    leaveEntitlement: 24,
+    annualLeaveEntitlement: 24,
+    carriedForwardLeave: 0,
+    leavePolicyYear: 2025
+  };
+
+  const balance = nextLeaveYearBalance(user, [], 2026);
+
+  assert.equal(balance.baseEntitlement, 24);
+  assert.equal(balance.entitlement, 48);
+});
+
 test("medicalClaimSummary tracks approved, pending, available, and unreserved amounts", () => {
   const user = { id: "u1", medicalClaimLimit: 500 };
   const summary = medicalClaimSummary(user, [

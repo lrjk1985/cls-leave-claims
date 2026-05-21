@@ -19,7 +19,6 @@ const {
   nextLeaveYearBalance,
   normalizeLeaveDays,
   normalizeMoney,
-  serviceAdjustedAnnualLeave,
   workingDaysBetween
 } = require("./src/domain");
 const {
@@ -258,7 +257,7 @@ function normalizeUser(user) {
   const serviceStartDate = user.serviceStartDate || String(user.createdAt || new Date().toISOString()).slice(0, 10);
   const startingLeaveEntitlement = normalizeLeaveDays(
     user.startingLeaveEntitlement ?? user.annualLeaveEntitlement ?? user.leaveEntitlement ?? 0,
-    "Starting annual leave"
+    "Initial annual leave days"
   );
   const normalized = {
     medicalClaimLimit: 500,
@@ -266,7 +265,7 @@ function normalizeUser(user) {
     serviceStartDate,
     startingLeaveEntitlement,
     annualLeaveEntitlement: normalizeLeaveDays(
-      user.annualLeaveEntitlement ?? Math.min(user.leaveEntitlement ?? 0, 18),
+      user.annualLeaveEntitlement ?? user.leaveEntitlement ?? startingLeaveEntitlement,
       "Annual leave entitlement"
     ),
     carriedForwardLeave: normalizeLeaveDays(user.carriedForwardLeave ?? 0, "Carried forward leave"),
@@ -275,7 +274,7 @@ function normalizeUser(user) {
     medicalClaimLimit: Number(user.medicalClaimLimit ?? 500)
   };
   if (user.annualLeaveEntitlement === undefined || user.annualLeaveEntitlement === null) {
-    normalized.annualLeaveEntitlement = serviceAdjustedAnnualLeave(normalized);
+    normalized.annualLeaveEntitlement = startingLeaveEntitlement;
   }
   if (!user.leaveEntitlement && user.leaveEntitlement !== 0) {
     normalized.leaveEntitlement = normalized.annualLeaveEntitlement + normalized.carriedForwardLeave;
@@ -338,23 +337,69 @@ function applyLeaveYearRollover(db, asOfDate = new Date()) {
   };
 }
 
+function serviceAnniversariesAfter(serviceStartDate, sinceDate, asOfDate) {
+  const start = assertIsoDate(serviceStartDate, "Service start date");
+  const since = assertIsoDate(sinceDate, "Last service accrual date");
+  const asOf = assertIsoDate(asOfDate, "Accrual date");
+  if (start > asOf || since >= asOf) return { count: 0, latestAnniversary: null };
+
+  let count = 0;
+  let latestAnniversary = null;
+  for (let year = since.getUTCFullYear(); year <= asOf.getUTCFullYear(); year += 1) {
+    const anniversary = new Date(Date.UTC(
+      year,
+      start.getUTCMonth(),
+      start.getUTCDate(),
+      12,
+      0,
+      0
+    ));
+    if (anniversary <= start || anniversary <= since || anniversary > asOf) continue;
+    count += 1;
+    latestAnniversary = formatIsoDate(anniversary);
+  }
+
+  return { count, latestAnniversary };
+}
+
 function applyServiceAnniversaryAccrual(db, asOfDate = new Date()) {
   const accrualDate = formatIsoDate(asOfDate);
   const processed = [];
 
   for (const user of db.users) {
-    const annualLeaveEntitlement = serviceAdjustedAnnualLeave(user, accrualDate);
-    if (annualLeaveEntitlement === Number(user.annualLeaveEntitlement || 0)) continue;
+    const baselineDate = String(user.leaveServiceAccrualAt || user.createdAt || accrualDate).slice(0, 10);
+    const accrual = serviceAnniversariesAfter(user.serviceStartDate || baselineDate, baselineDate, accrualDate);
+    if (!accrual.count) continue;
 
+    const currentAnnualLeave = normalizeLeaveDays(
+      user.annualLeaveEntitlement ?? user.startingLeaveEntitlement ?? user.leaveEntitlement ?? 0,
+      "Annual leave entitlement"
+    );
+    const annualLeaveEntitlement = currentAnnualLeave >= 18
+      ? currentAnnualLeave
+      : Math.min(18, currentAnnualLeave + accrual.count);
+    if (annualLeaveEntitlement === currentAnnualLeave) {
+      user.leaveServiceAccrualAt = accrual.latestAnniversary || nowIso();
+      processed.push({
+        userId: user.id,
+        asOfDate: accrualDate,
+        anniversariesApplied: accrual.count,
+        annualLeaveEntitlement,
+        leaveEntitlement: user.leaveEntitlement,
+        cappedOrManuallyHigher: true
+      });
+      continue;
+    }
     user.annualLeaveEntitlement = annualLeaveEntitlement;
     user.leaveEntitlement = normalizeLeaveDays(
       annualLeaveEntitlement + Number(user.carriedForwardLeave || 0),
       "Leave entitlement"
     );
-    user.leaveServiceAccrualAt = nowIso();
+    user.leaveServiceAccrualAt = accrual.latestAnniversary || nowIso();
     processed.push({
       userId: user.id,
       asOfDate: accrualDate,
+      anniversariesApplied: accrual.count,
       annualLeaveEntitlement,
       leaveEntitlement: user.leaveEntitlement
     });
@@ -450,7 +495,7 @@ function seedDb() {
       role: "manager",
       managerId: adminId,
       leaveEntitlement: 18,
-      startingLeaveEntitlement: 14,
+      startingLeaveEntitlement: 18,
       annualLeaveEntitlement: 18,
       carriedForwardLeave: 0,
       leavePolicyYear: currentLeaveYear(),
@@ -468,7 +513,7 @@ function seedDb() {
       role: "employee",
       managerId,
       leaveEntitlement: 16,
-      startingLeaveEntitlement: 14,
+      startingLeaveEntitlement: 16,
       annualLeaveEntitlement: 16,
       carriedForwardLeave: 0,
       leavePolicyYear: currentLeaveYear(),
@@ -486,7 +531,7 @@ function seedDb() {
       role: "employee",
       managerId,
       leaveEntitlement: 15,
-      startingLeaveEntitlement: 14,
+      startingLeaveEntitlement: 15,
       annualLeaveEntitlement: 15,
       carriedForwardLeave: 0,
       leavePolicyYear: currentLeaveYear(),
@@ -910,9 +955,9 @@ async function createEmployee(db, body) {
   const managerId = body.managerId || null;
   const serviceStartDate = String(body.serviceStartDate || formatIsoDate(new Date()));
   assertIsoDate(serviceStartDate, "Service start date");
-  const startingLeaveEntitlement = normalizeLeaveDays(
+  const initialAnnualLeaveDays = normalizeLeaveDays(
     body.startingLeaveEntitlement ?? body.leaveEntitlement ?? 0,
-    "Starting annual leave"
+    "Initial annual leave days"
   );
   const medicalClaimLimit = Number(body.medicalClaimLimit ?? 500);
   const password = String(body.password || "welcome123");
@@ -932,10 +977,7 @@ async function createEmployee(db, body) {
 
   const createdAt = nowIso();
   const leavePolicyYear = currentLeaveYear();
-  const annualLeaveEntitlement = serviceAdjustedAnnualLeave({
-    startingLeaveEntitlement,
-    serviceStartDate
-  });
+  const annualLeaveEntitlement = initialAnnualLeaveDays;
   const employee = {
     id: id("usr"),
     name,
@@ -943,11 +985,12 @@ async function createEmployee(db, body) {
     role,
     managerId,
     serviceStartDate,
-    startingLeaveEntitlement,
+    startingLeaveEntitlement: initialAnnualLeaveDays,
     annualLeaveEntitlement,
     carriedForwardLeave: 0,
     leavePolicyYear,
     leaveEntitlement: annualLeaveEntitlement,
+    leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
     active: true,
     createdAt,
@@ -972,8 +1015,6 @@ function updateEmployee(db, employeeId, body) {
     error.status = 404;
     throw error;
   }
-  let recomputeAnnualLeave = false;
-
   if (body.name !== undefined) {
     const name = String(body.name).trim();
     if (!name) throw new Error("Employee name is required.");
@@ -999,18 +1040,20 @@ function updateEmployee(db, employeeId, body) {
   if (body.serviceStartDate !== undefined) {
     assertIsoDate(String(body.serviceStartDate), "Service start date");
     employee.serviceStartDate = String(body.serviceStartDate);
-    recomputeAnnualLeave = true;
+    employee.leaveServiceAccrualAt = nowIso();
   }
   if (body.startingLeaveEntitlement !== undefined) {
-    employee.startingLeaveEntitlement = normalizeLeaveDays(body.startingLeaveEntitlement, "Starting annual leave");
-    recomputeAnnualLeave = true;
-  }
-  if (recomputeAnnualLeave) {
-    employee.annualLeaveEntitlement = serviceAdjustedAnnualLeave(employee);
+    const initialAnnualLeaveDays = normalizeLeaveDays(
+      body.startingLeaveEntitlement,
+      "Initial annual leave days"
+    );
+    employee.startingLeaveEntitlement = initialAnnualLeaveDays;
+    employee.annualLeaveEntitlement = initialAnnualLeaveDays;
     employee.leaveEntitlement = normalizeLeaveDays(
-      employee.annualLeaveEntitlement + Number(employee.carriedForwardLeave || 0),
+      initialAnnualLeaveDays + Number(employee.carriedForwardLeave || 0),
       "Leave entitlement"
     );
+    employee.leaveServiceAccrualAt = nowIso();
   }
   if (body.leaveEntitlement !== undefined) {
     employee.leaveEntitlement = normalizeLeaveDays(body.leaveEntitlement, "Leave entitlement");

@@ -20,7 +20,8 @@ Seeded local accounts:
 
 - Employee login
 - Leave balance shown after login
-- Annual leave increases by 1 day on each completed service anniversary, capped at 18 annual base days
+- Admin can set the employee's initial annual leave days as the current annual leave amount
+- Future service-anniversary increases can apply from the configured amount, without changing the initial setup value
 - Unused leave is carried forward into the next year on January 1
 - Saturdays, Sundays, and Singapore public holidays are excluded from leave deduction
 - Singapore public holidays sync from MOM's consolidated data.gov.sg dataset with a local cache
@@ -30,7 +31,7 @@ Seeded local accounts:
 - Medical and general claim submission with receipt uploads
 - Medical claim balance shown after login, with admin-set medical claim limits
 - General claims have no claim limit
-- Admin employee management, role assignment, direct report assignment, initial leave entitlement, and medical claim limit setup
+- Admin employee management, role assignment, direct report assignment, initial annual leave days, and medical claim limit setup
 - Supabase V1 rollout migration in `supabase/v1-rollout.sql`
 - Vercel serverless adapter and daily maintenance cron in `vercel.json`
 - Resend-ready production email delivery with `.ics` leave calendar attachments

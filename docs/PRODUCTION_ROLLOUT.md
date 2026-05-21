@@ -34,10 +34,11 @@ The app applies leave rollover and service-anniversary leave checks automaticall
 
 Policy implemented locally:
 
-- Each employee has a service start date and a starting annual leave value.
-- Personnel must serve a full year before receiving the extra service day.
-- The annual base entitlement increases by 1 day on the employee's completed service anniversary.
-- The annual base entitlement is capped at 18 days.
+- Each employee has a service start date and an initial annual leave days value.
+- The initial annual leave days value is treated as the employee's current annual leave amount during setup.
+- Personnel must serve a full year before receiving any future extra service day.
+- Future automatic service increases add from the configured amount after setup, without backfilling historical years.
+- Automatic service increases are capped at 18 annual base days, unless Admin has manually set a higher annual leave amount.
 - Any leave left from the ending year is carried forward and added to the new year's allotment.
 - The carry-forward amount is not included in the 18-day service entitlement cap.
 - January 1 rollover keeps the carry-forward logic separate from service-anniversary accrual.

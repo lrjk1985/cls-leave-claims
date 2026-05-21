@@ -143,7 +143,7 @@ function serviceAdjustedAnnualLeave(user, asOfDate = new Date()) {
   const asOf = asIsoDate(asOfDate);
   const base = normalizeLeaveDays(
     user.startingLeaveEntitlement ?? user.leaveEntitlement ?? 0,
-    "Starting annual leave"
+    "Initial annual leave days"
   );
   const serviceStartDate = user.serviceStartDate || asOf;
   const years = completedYearsOfService(serviceStartDate, asOf);
@@ -187,7 +187,10 @@ function nextLeaveYearBalance(user, leaveRequests, nextYear) {
     entitlementOverride: user.leaveEntitlement
   });
   const carriedForward = previousSummary.available;
-  const baseEntitlement = serviceAdjustedAnnualLeave(user, `${Number(nextYear)}-01-01`);
+  const baseEntitlement = normalizeLeaveDays(
+    user.annualLeaveEntitlement ?? user.startingLeaveEntitlement ?? user.leaveEntitlement ?? 0,
+    "Annual leave entitlement"
+  );
 
   return {
     year: Number(nextYear),

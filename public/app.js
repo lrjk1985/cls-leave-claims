@@ -717,7 +717,7 @@ function employeeSearchText(employee) {
     roleName(employee.role),
     manager,
     `service ${employee.serviceStartDate}`,
-    `leave ${employee.startingLeaveEntitlement} ${employee.leaveEntitlement}`,
+    `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement}`,
     `medical ${employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
   ].join(" ").toLowerCase();
@@ -768,8 +768,8 @@ function renderEmployees() {
               <input id="employee-service-start" name="serviceStartDate" type="date" required value="${todayIso()}">
             </div>
             <div class="field">
-              <label for="employee-leave">Starting Annual Leave</label>
-              <input id="employee-leave" name="startingLeaveEntitlement" type="number" min="0" max="18" step="0.5" value="14">
+              <label for="employee-leave">Set Initial Annual Leave Days</label>
+              <input id="employee-leave" name="startingLeaveEntitlement" type="number" min="0" step="0.5" value="14">
             </div>
             <div class="field">
               <label for="employee-medical-limit">Medical Claim Limit</label>
@@ -825,11 +825,11 @@ function renderEmployees() {
                 <input data-field="serviceStartDate" type="date" value="${escapeHtml(employee.serviceStartDate || "")}">
               </div>
               <div class="field">
-                <label>Start Leave</label>
-                <input data-field="startingLeaveEntitlement" type="number" min="0" max="18" step="0.5" value="${employee.startingLeaveEntitlement}">
+                <label>Annual Leave Days</label>
+                <input data-field="startingLeaveEntitlement" type="number" min="0" step="0.5" value="${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement}">
               </div>
               <div class="field">
-                <label>Current Allotment</label>
+                <label>Total With Carry Forward</label>
                 <input type="number" value="${employee.leaveEntitlement}" disabled>
               </div>
               <div class="field">
