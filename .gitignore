@@ -1,0 +1,7 @@
+data/local-db.json
+data/sg-public-holidays.json
+data/uploads/
+node_modules/
+.env
+.DS_Store
+*.log

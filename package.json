@@ -1,0 +1,13 @@
+{
+  "name": "cls-leave-claims",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Employee Leave Application and Medical Claims System for CLS.",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
