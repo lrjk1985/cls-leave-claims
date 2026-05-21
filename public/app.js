@@ -21,6 +21,18 @@ const state = {
 
 const app = document.querySelector("#app");
 const HISTORY_PAGE_SIZE = 10;
+const MAX_RECEIPT_BYTES = 5_000_000;
+const RECEIPT_HELP_TEXT = "PDF, JPG, PNG, WebP, HEIC, or HEIF. Max 5 MB.";
+const RECEIPT_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif";
+const RECEIPT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif"
+]);
+const RECEIPT_EXTENSIONS = new Set([".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -275,14 +287,55 @@ function fileToDataUrl(file) {
   });
 }
 
-async function claimFormPayload(form) {
-  const body = formObject(form);
+function receiptExtension(name) {
+  const match = String(name || "").toLowerCase().match(/\.[^.]+$/);
+  return match ? match[0] : "";
+}
+
+function assertReceiptFile(file) {
+  if (file.size > MAX_RECEIPT_BYTES) {
+    throw new Error("Receipt upload must be 5 MB or smaller.");
+  }
+
+  const type = String(file.type || "").toLowerCase();
+  const extension = receiptExtension(file.name);
+  if (!RECEIPT_MIME_TYPES.has(type) && !RECEIPT_EXTENSIONS.has(extension)) {
+    throw new Error(`Receipt must be ${RECEIPT_HELP_TEXT}`);
+  }
+}
+
+function newClaimSubmissionId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function setFormSubmitting(form, submitting, label = "Submitting...") {
+  form.dataset.submitting = submitting ? "true" : "false";
+  form.setAttribute("aria-busy", submitting ? "true" : "false");
+  const submitButton = form.querySelector("button[type='submit']");
+  if (submitButton) {
+    if (submitting) {
+      submitButton.dataset.originalText = submitButton.dataset.originalText || submitButton.textContent;
+      submitButton.textContent = label;
+    } else if (submitButton.dataset.originalText) {
+      submitButton.textContent = submitButton.dataset.originalText;
+      delete submitButton.dataset.originalText;
+    }
+  }
+  form.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    control.disabled = submitting;
+  });
+}
+
+async function claimFormPayload(form, body) {
+  body = { ...body };
   body.category = body.category === "Others" ? "Others" : "Medical";
   body.claimType = body.category === "Medical" ? "medical" : "general";
   const file = form.querySelector("input[type='file'][name='receipt']")?.files?.[0];
   if (!file) {
     throw new Error("Please upload a receipt.");
   }
+  assertReceiptFile(file);
 
   body.receipt = {
     name: file.name,
@@ -529,6 +582,7 @@ function renderClaims() {
         </div>
         <div class="section-body">
           <form class="form-grid three" data-form="claim">
+            <input type="hidden" name="clientSubmissionId" value="${newClaimSubmissionId()}">
             <div class="field">
               <label for="claim-category">Category</label>
               <select id="claim-category" name="category" required>
@@ -550,7 +604,8 @@ function renderClaims() {
             </div>
             <div class="field">
               <label for="claim-receipt-file">Receipt Upload</label>
-              <input id="claim-receipt-file" name="receipt" type="file" accept="image/*,.pdf" required>
+              <input id="claim-receipt-file" name="receipt" type="file" accept="${RECEIPT_ACCEPT}" required>
+              <div class="field-hint">${RECEIPT_HELP_TEXT}</div>
             </div>
             <div class="field full">
               <label for="claim-description">Claim Explanation</label>
@@ -969,10 +1024,16 @@ document.addEventListener("submit", async (event) => {
   const formType = form.dataset.form;
   if (!formType) return;
   event.preventDefault();
+  if (form.dataset.submitting === "true") {
+    showToast("Please wait for this submission to finish.", "error");
+    return;
+  }
 
+  const body = formObject(form);
+  const submittingLabel = formType === "claim" ? "Submitting Claim..." : "Submitting...";
   try {
+    setFormSubmitting(form, true, submittingLabel);
     state.busy = true;
-    const body = formObject(form);
     if (formType === "login") {
       const data = await api("/api/login", {
         method: "POST",
@@ -991,7 +1052,7 @@ document.addEventListener("submit", async (event) => {
       showToast("Leave application submitted.");
     }
     if (formType === "claim") {
-      const claimBody = await claimFormPayload(form);
+      const claimBody = await claimFormPayload(form, body);
       const data = await api("/api/claims", {
         method: "POST",
         body: JSON.stringify(claimBody)
@@ -1022,6 +1083,7 @@ document.addEventListener("submit", async (event) => {
     showToast(error.message, "error");
   } finally {
     state.busy = false;
+    if (form.isConnected) setFormSubmitting(form, false);
   }
 });
 

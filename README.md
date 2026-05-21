@@ -30,6 +30,7 @@ Seeded local accounts:
 - Direct Report approval queue
 - Approved / not approved decision emails to employees
 - Medical and general claim submission with receipt uploads
+- Claim receipts accept PDF, JPG, PNG, WebP, HEIC, or HEIF files up to 5 MB
 - Medical claim balance shown after login, with admin-set medical claim limits
 - General claims have no claim limit
 - Admin employee management, role assignment, direct report assignment, initial annual leave days, and medical claim limit setup

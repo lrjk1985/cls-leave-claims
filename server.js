@@ -36,6 +36,32 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
 const MAX_JSON_BYTES = 10_000_000;
 const MAX_RECEIPT_BYTES = 5_000_000;
+const RECEIPT_TYPE_ERROR = "Receipt must be a PDF, JPG, PNG, WebP, HEIC, or HEIF file.";
+const RECEIPT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif"
+]);
+const RECEIPT_EXTENSION_MIME_TYPES = new Map([
+  [".pdf", "application/pdf"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+  [".heic", "image/heic"],
+  [".heif", "image/heif"]
+]);
+const RECEIPT_MIME_EXTENSIONS = new Map([
+  ["application/pdf", ".pdf"],
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+  ["image/heic", ".heic"],
+  ["image/heif", ".heif"]
+]);
 const SUPABASE_STATE_KEY = "default";
 const SUPABASE_RECEIPT_BUCKET = process.env.SUPABASE_RECEIPT_BUCKET || "claim-receipts";
 const sessions = new Map();
@@ -833,13 +859,56 @@ function safeReceiptName(name) {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
 }
 
+function receiptExtension(name) {
+  return path.extname(String(name || "")).toLowerCase();
+}
+
+function detectReceiptMimeType(buffer) {
+  if (buffer.subarray(0, 1024).includes(Buffer.from("%PDF-", "utf8"))) return "application/pdf";
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return "image/png";
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = buffer.subarray(8, Math.min(buffer.length, 32)).toString("ascii");
+    if (/(heic|heix|hevc|hevx)/.test(brand)) return "image/heic";
+    if (/(heif|mif1|msf1)/.test(brand)) return "image/heif";
+  }
+  return "";
+}
+
+function receiptMimeType(originalName, buffer) {
+  const extensionMimeType = RECEIPT_EXTENSION_MIME_TYPES.get(receiptExtension(originalName));
+  const detectedMimeType = detectReceiptMimeType(buffer);
+  const heifFamily = new Set(["image/heic", "image/heif"]);
+
+  if (
+    detectedMimeType &&
+    (!extensionMimeType ||
+      extensionMimeType === detectedMimeType ||
+      (heifFamily.has(extensionMimeType) && heifFamily.has(detectedMimeType)))
+  ) {
+    return detectedMimeType;
+  }
+
+  throw new Error(RECEIPT_TYPE_ERROR);
+}
+
 function parseReceipt(receipt) {
   if (!receipt || typeof receipt !== "object") {
     throw new Error("A receipt upload is required.");
   }
 
   const originalName = safeReceiptName(receipt.name);
-  const mimeType = String(receipt.type || "application/octet-stream");
   const match = String(receipt.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) {
     throw new Error("Receipt upload was not in the expected format.");
@@ -852,17 +921,21 @@ function parseReceipt(receipt) {
   if (buffer.length > MAX_RECEIPT_BYTES) {
     throw new Error("Receipt upload must be 5 MB or smaller.");
   }
+  const mimeType = receiptMimeType(originalName, buffer);
 
   return {
     originalName,
-    mimeType: match[1] || mimeType,
+    mimeType,
     buffer
   };
 }
 
 async function saveReceiptAttachment(claimId, receipt) {
   const parsed = parseReceipt(receipt);
-  const extension = path.extname(parsed.originalName);
+  const originalExtension = receiptExtension(parsed.originalName);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(originalExtension) === parsed.mimeType
+    ? originalExtension
+    : RECEIPT_MIME_EXTENSIONS.get(parsed.mimeType);
   const storedName = isSupabaseEnabled()
     ? `claims/${claimId}${extension || ".receipt"}`
     : `${claimId}${extension || ".receipt"}`;
@@ -1220,6 +1293,14 @@ async function createClaim(db, user, body) {
     throw new Error("No Direct Report / approver has been assigned to your profile yet.");
   }
 
+  const clientSubmissionId = String(body.clientSubmissionId || "").trim().slice(0, 120);
+  if (clientSubmissionId) {
+    const existingClaim = db.medicalClaims.find(
+      (claim) => claim.employeeId === user.id && claim.clientSubmissionId === clientSubmissionId
+    );
+    if (existingClaim) return existingClaim;
+  }
+
   const { category, claimType } = claimCategoryAndType(body);
   const claimDate = String(body.claimDate || "");
   assertIsoDate(claimDate, "Claim date");
@@ -1250,6 +1331,7 @@ async function createClaim(db, user, body) {
     amount,
     receiptRef,
     receipt: null,
+    clientSubmissionId: clientSubmissionId || null,
     description,
     status: "pending",
     decisionNote: "",
