@@ -63,6 +63,31 @@ function verifyPassword(password, user) {
   return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(user.passwordHash, "hex"));
 }
 
+function changePassword(user, body) {
+  const currentPassword = String(body.currentPassword || "");
+  const newPassword = String(body.newPassword || "");
+  const confirmPassword = String(body.confirmPassword || "");
+
+  if (!currentPassword) throw new Error("Please enter your current password.");
+  if (!verifyPassword(currentPassword, user)) throw new Error("Current password is incorrect.");
+  if (newPassword.length < 8) throw new Error("New password must be at least 8 characters.");
+  if (newPassword !== confirmPassword) throw new Error("New passwords do not match.");
+  if (verifyPassword(newPassword, user)) throw new Error("New password must be different from your current password.");
+
+  Object.assign(user, createPassword(newPassword));
+  user.updatedAt = nowIso();
+  return user;
+}
+
+function keepOnlyCurrentSession(db, userId, currentToken) {
+  for (const [token, session] of sessions.entries()) {
+    if (session.userId === userId && token !== currentToken) sessions.delete(token);
+  }
+  db.sessions = db.sessions.filter(
+    (session) => session.userId !== userId || session.token === currentToken
+  );
+}
+
 function publicUser(user) {
   if (!user) return null;
   const {
@@ -1402,6 +1427,13 @@ async function handleApi(req, res, pathname) {
   }
 
   const user = requireUser(req, db);
+
+  if (req.method === "POST" && pathname === "/api/account/password") {
+    changePassword(user, body);
+    keepOnlyCurrentSession(db, user.id, parseCookies(req).cls_session);
+    await saveDb(db);
+    return jsonResponse(res, 200, { data: { dashboard: dashboard(db, user) } });
+  }
 
   if (req.method === "GET" && pathname === "/api/dashboard") {
     return jsonResponse(res, 200, { data: dashboard(db, user) });

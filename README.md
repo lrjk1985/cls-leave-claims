@@ -19,6 +19,7 @@ Seeded local accounts:
 ## What Is Included
 
 - Employee login
+- Employees can change their own password after logging in
 - Leave balance shown after login
 - Admin can set the employee's initial annual leave days as the current annual leave amount
 - Future service-anniversary increases can apply from the configured amount, without changing the initial setup value

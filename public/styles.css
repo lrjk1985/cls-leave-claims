@@ -327,6 +327,19 @@ button {
   padding: 20px;
 }
 
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding: 20px;
+}
+
+.detail-value {
+  margin-top: 7px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -614,6 +627,7 @@ tr:last-child td {
   }
 
   .metrics,
+  .detail-grid,
   .form-grid,
   .form-grid.three {
     grid-template-columns: 1fr 1fr;
@@ -643,6 +657,7 @@ tr:last-child td {
   }
 
   .metrics,
+  .detail-grid,
   .form-grid,
   .form-grid.three,
   .employee-row {

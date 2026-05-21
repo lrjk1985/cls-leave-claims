@@ -357,6 +357,7 @@ function renderShell(content) {
           ${renderNavButton("claims", "Claims")}
           ${(approvals || user.role !== "employee") ? renderNavButton("approvals", "Approvals", approvals || "") : ""}
           ${isAdmin() ? renderNavButton("employees", "Employees") : ""}
+          ${renderNavButton("account", "Account")}
           ${renderNavButton("mail", "Email Outbox")}
         </nav>
         <button class="button ghost" data-action="logout">Sign out</button>
@@ -881,12 +882,66 @@ function renderMail() {
   `);
 }
 
+function renderAccount() {
+  const { user } = state.dashboard;
+  renderShell(`
+    ${renderTopbar("Account", "Profile and password.")}
+    <div class="content-grid">
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Profile</h2>
+        </div>
+        <div class="detail-grid">
+          <div>
+            <div class="metric-label">Name</div>
+            <div class="detail-value">${escapeHtml(user.name)}</div>
+          </div>
+          <div>
+            <div class="metric-label">Email</div>
+            <div class="detail-value">${escapeHtml(user.email)}</div>
+          </div>
+          <div>
+            <div class="metric-label">Role</div>
+            <div class="detail-value">${roleName(user.role)}</div>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Change Password</h2>
+        </div>
+        <div class="section-body">
+          <form class="form-grid" data-form="password">
+            <div class="field">
+              <label for="current-password">Current Password</label>
+              <input id="current-password" name="currentPassword" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
+              <label for="new-password">New Password</label>
+              <input id="new-password" name="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="field">
+              <label for="confirm-password">Confirm New Password</label>
+              <input id="confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="field">
+              <label>&nbsp;</label>
+              <button class="button primary" type="submit">Change Password</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  `);
+}
+
 function render() {
   if (!state.dashboard) return renderLogin();
   if (state.activeTab === "leave") return renderLeave();
   if (state.activeTab === "claims") return renderClaims();
   if (state.activeTab === "approvals") return renderApprovals();
   if (state.activeTab === "employees" && isAdmin()) return renderEmployees();
+  if (state.activeTab === "account") return renderAccount();
   if (state.activeTab === "mail") return renderMail();
   return renderOverview();
 }
@@ -944,6 +999,15 @@ document.addEventListener("submit", async (event) => {
       form.reset();
       updateDashboard(data);
       showToast("Employee created.");
+    }
+    if (formType === "password") {
+      const data = await api("/api/account/password", {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      form.reset();
+      updateDashboard(data);
+      showToast("Password changed.");
     }
   } catch (error) {
     showToast(error.message, "error");
