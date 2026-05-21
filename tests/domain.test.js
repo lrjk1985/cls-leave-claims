@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   canReview,
   completedYearsOfService,
+  generalClaimSummary,
   leaveDayBreakdown,
   leaveSummary,
   medicalClaimSummary,
@@ -138,6 +139,21 @@ test("medicalClaimSummary tracks approved, pending, available, and unreserved am
     pending: 80.1,
     available: 379.75,
     unreserved: 299.65
+  });
+});
+
+test("generalClaimSummary tracks only others claim amounts", () => {
+  const user = { id: "u1", medicalClaimLimit: 500 };
+  const summary = generalClaimSummary(user, [
+    { employeeId: "u1", claimType: "general", status: "approved", amount: 120.25 },
+    { employeeId: "u1", claimType: "general", status: "pending", amount: 80.1 },
+    { employeeId: "u1", claimType: "medical", status: "approved", amount: 999 },
+    { employeeId: "u2", claimType: "general", status: "approved", amount: 50 }
+  ]);
+
+  assert.deepEqual(summary, {
+    approved: 120.25,
+    pending: 80.1
   });
 });
 

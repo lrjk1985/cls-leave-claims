@@ -205,6 +205,10 @@ function claimKind(value) {
   return value === "general" ? "general" : "medical";
 }
 
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
 function medicalClaimSummary(user, claims) {
   const ownMedicalClaims = claims.filter(
     (claim) => claim.employeeId === user.id && claimKind(claim.claimType) === "medical"
@@ -219,10 +223,27 @@ function medicalClaimSummary(user, claims) {
 
   return {
     limit,
-    approved: Math.round(approved * 100) / 100,
-    pending: Math.round(pending * 100) / 100,
-    available: Math.round((limit - approved) * 100) / 100,
-    unreserved: Math.round((limit - approved - pending) * 100) / 100
+    approved: roundMoney(approved),
+    pending: roundMoney(pending),
+    available: roundMoney(limit - approved),
+    unreserved: roundMoney(limit - approved - pending)
+  };
+}
+
+function generalClaimSummary(user, claims) {
+  const ownGeneralClaims = claims.filter(
+    (claim) => claim.employeeId === user.id && claimKind(claim.claimType) === "general"
+  );
+  const approved = ownGeneralClaims
+    .filter((claim) => claim.status === "approved")
+    .reduce((total, claim) => total + Number(claim.amount || 0), 0);
+  const pending = ownGeneralClaims
+    .filter((claim) => claim.status === "pending")
+    .reduce((total, claim) => total + Number(claim.amount || 0), 0);
+
+  return {
+    approved: roundMoney(approved),
+    pending: roundMoney(pending)
   };
 }
 
@@ -248,6 +269,7 @@ module.exports = {
   currentLeaveYear,
   decisionLabel,
   formatIsoDate,
+  generalClaimSummary,
   leaveDayBreakdown,
   leaveRequestYear,
   leaveSummary,

@@ -491,6 +491,7 @@ function renderLeave() {
 
 function renderClaims() {
   const summary = state.dashboard.medicalClaimSummary;
+  const generalSummary = state.dashboard.generalClaimSummary || { pending: 0, approved: 0 };
   const claims = state.dashboard.medicalClaims;
   const pendingClaims = claims.filter((item) => item.status === "pending");
   renderShell(`
@@ -512,6 +513,14 @@ function renderClaims() {
         <div class="metric">
           <div class="metric-label">Medical Approved</div>
           <div class="metric-value money-value">${money(summary.approved)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Others Pending</div>
+          <div class="metric-value money-value">${money(generalSummary.pending)}</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Others Approved</div>
+          <div class="metric-value money-value">${money(generalSummary.approved)}</div>
         </div>
       </section>
       <section class="section">
