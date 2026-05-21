@@ -1,10 +1,47 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/[...path].js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "public/index.html",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "public/app.js",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "public/styles.css",
+      "use": "@vercel/static"
+    }
+  ],
   "functions": {
     "api/[...path].js": {
       "maxDuration": 30
     }
   },
+  "routes": [
+    {
+      "src": "/api/(?<path>.*)",
+      "dest": "/api/[...path].js?path=$path"
+    },
+    {
+      "src": "/app.js",
+      "dest": "/public/app.js"
+    },
+    {
+      "src": "/styles.css",
+      "dest": "/public/styles.css"
+    },
+    {
+      "src": "/.*",
+      "dest": "/public/index.html"
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron/daily-maintenance",
