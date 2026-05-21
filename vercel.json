@@ -19,11 +19,6 @@
       "use": "@vercel/static"
     }
   ],
-  "functions": {
-    "api/[...path].js": {
-      "maxDuration": 30
-    }
-  },
   "routes": [
     {
       "src": "/api/(?<path>.*)",
