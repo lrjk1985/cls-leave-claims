@@ -4,7 +4,11 @@ const path = require("node:path");
 const DATASET_ID = "d_8ef23381f9417e4d4254ee8b4dcdb176";
 const DATASET_URL = `https://data.gov.sg/api/action/datastore_search?resource_id=${DATASET_ID}&limit=500`;
 const REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 24 * 7;
-const DEFAULT_CACHE_PATH = path.join(__dirname, "..", "data", "sg-public-holidays.json");
+const DEFAULT_CACHE_PATH =
+  process.env.PUBLIC_HOLIDAY_CACHE_PATH ||
+  (process.env.VERCEL
+    ? path.join("/tmp", "sg-public-holidays.json")
+    : path.join(__dirname, "..", "data", "sg-public-holidays.json"));
 
 function isoYear(date) {
   return Number(String(date).slice(0, 4));

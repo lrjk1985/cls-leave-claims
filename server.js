@@ -36,6 +36,8 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
 const MAX_JSON_BYTES = 10_000_000;
 const MAX_RECEIPT_BYTES = 5_000_000;
+const SUPABASE_STATE_KEY = "default";
+const SUPABASE_RECEIPT_BUCKET = process.env.SUPABASE_RECEIPT_BUCKET || "claim-receipts";
 const sessions = new Map();
 
 function nowIso() {
@@ -129,14 +131,90 @@ async function readJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function supabaseConfig() {
+  const url = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) return null;
+  return { url, serviceRoleKey };
+}
+
+function isSupabaseEnabled() {
+  return Boolean(supabaseConfig());
+}
+
+async function supabaseRequest(pathname, options = {}) {
+  const config = supabaseConfig();
+  if (!config) throw new Error("Supabase is not configured.");
+
+  const headers = {
+    apikey: config.serviceRoleKey,
+    Authorization: `Bearer ${config.serviceRoleKey}`,
+    ...(options.headers || {})
+  };
+
+  const response = await fetch(`${config.url}${pathname}`, {
+    ...options,
+    headers
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Supabase returned HTTP ${response.status}: ${text || response.statusText}`);
+  }
+
+  return response;
+}
+
+async function loadSupabaseDb() {
+  const response = await supabaseRequest(
+    `/rest/v1/cls_app_state?key=eq.${encodeURIComponent(SUPABASE_STATE_KEY)}&select=data`,
+    { headers: { Accept: "application/json" } }
+  );
+  const rows = await response.json();
+  if (Array.isArray(rows) && rows[0]?.data) {
+    const db = normalizeDb(rows[0].data);
+    const rollover = applyLeaveYearRollover(db);
+    const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
+    const sessionsPruned = pruneExpiredSessions(db);
+    if (rollover.changed || anniversaryAccrual.changed || sessionsPruned) await saveSupabaseDb(db);
+    return db;
+  }
+
+  const db = seedDb();
+  applyLeaveYearRollover(db);
+  applyServiceAnniversaryAccrual(db);
+  await saveSupabaseDb(db);
+  return db;
+}
+
+async function saveSupabaseDb(db) {
+  await supabaseRequest(
+    `/rest/v1/cls_app_state?on_conflict=key`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates"
+      },
+      body: JSON.stringify({
+        key: SUPABASE_STATE_KEY,
+        data: db
+      })
+    }
+  );
+}
+
 async function loadDb() {
+  if (isSupabaseEnabled()) return loadSupabaseDb();
+
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
     const raw = await fs.readFile(DB_PATH, "utf8");
     const db = normalizeDb(JSON.parse(raw));
     const rollover = applyLeaveYearRollover(db);
     const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
-    if (rollover.changed || anniversaryAccrual.changed) await saveDb(db);
+    const sessionsPruned = pruneExpiredSessions(db);
+    if (rollover.changed || anniversaryAccrual.changed || sessionsPruned) await saveDb(db);
     return db;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -149,6 +227,11 @@ async function loadDb() {
 }
 
 async function saveDb(db) {
+  if (isSupabaseEnabled()) {
+    await saveSupabaseDb(db);
+    return;
+  }
+
   await fs.mkdir(DATA_DIR, { recursive: true });
   const tmpPath = `${DB_PATH}.tmp`;
   await fs.writeFile(tmpPath, `${JSON.stringify(db, null, 2)}\n`, "utf8");
@@ -165,7 +248,8 @@ function normalizeDb(db) {
         }))
       : [],
     medicalClaims: Array.isArray(db.medicalClaims) ? db.medicalClaims.map(normalizeClaim) : [],
-    emails: Array.isArray(db.emails) ? db.emails : []
+    emails: Array.isArray(db.emails) ? db.emails : [],
+    sessions: Array.isArray(db.sessions) ? db.sessions : []
   };
 }
 
@@ -283,7 +367,51 @@ function applyServiceAnniversaryAccrual(db, asOfDate = new Date()) {
   };
 }
 
+function seedProductionDb() {
+  const createdAt = nowIso();
+  const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || "password";
+  const admin = {
+    id: "usr_admin",
+    name: process.env.INITIAL_ADMIN_NAME || "CLS Admin",
+    email: String(process.env.INITIAL_ADMIN_EMAIL || "admin@cls.local").trim().toLowerCase(),
+    role: "admin",
+    managerId: null,
+    leaveEntitlement: 0,
+    startingLeaveEntitlement: 0,
+    annualLeaveEntitlement: 0,
+    carriedForwardLeave: 0,
+    leavePolicyYear: currentLeaveYear(),
+    serviceStartDate: formatIsoDate(new Date()),
+    medicalClaimLimit: 0,
+    active: true,
+    createdAt,
+    updatedAt: createdAt,
+    ...createPassword(adminPassword)
+  };
+
+  return {
+    users: [admin],
+    leaveRequests: [],
+    medicalClaims: [],
+    sessions: [],
+    emails: [
+      makeEmail([admin], {
+        recipientId: admin.id,
+        type: "system_ready",
+        subject: "CLS Leave & Claims is ready",
+        body: "Your production CLS Leave & Claims system has been initialized.",
+        relatedId: admin.id,
+        createdAt
+      })
+    ]
+  };
+}
+
 function seedDb() {
+  if (process.env.VERCEL && process.env.SEED_DEMO_DATA !== "true") {
+    return seedProductionDb();
+  }
+
   const createdAt = nowIso();
   const adminId = "usr_admin";
   const managerId = "usr_manager";
@@ -414,6 +542,7 @@ function seedDb() {
     users,
     leaveRequests: [leaveRequest],
     medicalClaims: [medicalClaim],
+    sessions: [],
     emails: [
       makeEmail(users, {
         recipientId: managerId,
@@ -443,11 +572,20 @@ function getUserByEmail(db, email) {
   return db.users.find((user) => user.email.toLowerCase() === String(email).toLowerCase());
 }
 
+function pruneExpiredSessions(db) {
+  const before = db.sessions.length;
+  db.sessions = db.sessions.filter((session) => Number(session.expiresAt) >= Date.now());
+  return before !== db.sessions.length;
+}
+
 function getAuthenticatedUser(req, db) {
   const token = parseCookies(req).cls_session;
   if (!token) return null;
-  const session = sessions.get(token);
-  if (!session || session.expiresAt < Date.now()) {
+  let session = sessions.get(token);
+  if (!session && Array.isArray(db.sessions)) {
+    session = db.sessions.find((item) => item.token === token);
+  }
+  if (!session || Number(session.expiresAt) < Date.now()) {
     sessions.delete(token);
     return null;
   }
@@ -483,14 +621,139 @@ function makeEmail(users, payload) {
     type: payload.type,
     relatedId: payload.relatedId || null,
     createdAt: payload.createdAt || nowIso(),
-    delivered: false
+    delivered: false,
+    deliveredAt: null,
+    deliveryError: null
   };
 }
 
-function addEmail(db, payload) {
+function htmlEmailBody(body) {
+  return String(body)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function escapeIcsText(value) {
+  return String(value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function isoDateToIcs(date) {
+  return String(date).replace(/-/g, "");
+}
+
+function addDays(date, days) {
+  const [year, month, day] = String(date).split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  next.setUTCDate(next.getUTCDate() + days);
+  return next.toISOString().slice(0, 10);
+}
+
+function makeLeaveCalendarAttachment({ request, employee, reviewer, status = "TENTATIVE" }) {
+  const calendarStatus = status === "CONFIRMED" ? "CONFIRMED" : "TENTATIVE";
+  const description = [
+    `${employee.name} is on leave from ${request.startDate} to ${request.endDate}.`,
+    `${request.days} deductible working day(s).`,
+    request.reason ? `Reason: ${request.reason}` : "",
+    reviewer ? `Reviewed by: ${reviewer.name}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const ics = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//CLS Leave Claims//EN",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${request.id}@cls-leave-claims`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`,
+    `DTSTART;VALUE=DATE:${isoDateToIcs(request.startDate)}`,
+    `DTEND;VALUE=DATE:${isoDateToIcs(addDays(request.endDate, 1))}`,
+    `SUMMARY:${escapeIcsText(`${employee.name} on leave`)}`,
+    `DESCRIPTION:${escapeIcsText(description)}`,
+    `STATUS:${calendarStatus}`,
+    "TRANSP:OPAQUE",
+    "END:VEVENT",
+    "END:VCALENDAR"
+  ].join("\r\n");
+
+  return {
+    filename: `${employee.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "leave"}-${request.startDate}.ics`,
+    content: Buffer.from(`${ics}\r\n`, "utf8").toString("base64")
+  };
+}
+
+async function deliverEmail(email, options = {}) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    console.log(`[Local email] To: ${email.to} | ${email.subject}`);
+    return { delivered: false };
+  }
+
+  if (!email.to) {
+    throw new Error("Email recipient is missing.");
+  }
+
+  const from = process.env.EMAIL_FROM || "CLS Leave & Claims <onboarding@resend.dev>";
+  const appUrl = process.env.APP_URL;
+  const body = appUrl ? `${email.body}\n\nOpen CLS Leave & Claims: ${appUrl}` : email.body;
+  const payload = {
+    from,
+    to: [email.to],
+    subject: email.subject,
+    text: body,
+    html: htmlEmailBody(body)
+  };
+
+  if (options.attachments?.length) {
+    payload.attachments = options.attachments;
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Resend returned HTTP ${response.status}: ${text || response.statusText}`);
+  }
+
+  const result = await response.json();
+  return { delivered: true, providerId: result.id || result.data?.id || null };
+}
+
+async function addEmail(db, payload, options = {}) {
   const email = makeEmail(db.users, payload);
   db.emails.unshift(email);
-  console.log(`[Local email] To: ${email.to} | ${email.subject}`);
+  try {
+    const result = await deliverEmail(email, options);
+    email.delivered = Boolean(result.delivered);
+    email.deliveredAt = result.delivered ? nowIso() : null;
+    email.providerId = result.providerId || null;
+  } catch (error) {
+    email.delivered = false;
+    email.deliveryError = error.message;
+    console.warn(`[Email delivery] ${error.message}`);
+  }
   return email;
 }
 
@@ -529,17 +792,64 @@ function parseReceipt(receipt) {
 async function saveReceiptAttachment(claimId, receipt) {
   const parsed = parseReceipt(receipt);
   const extension = path.extname(parsed.originalName);
-  const storedName = `${claimId}${extension || ".receipt"}`;
+  const storedName = isSupabaseEnabled()
+    ? `claims/${claimId}${extension || ".receipt"}`
+    : `${claimId}${extension || ".receipt"}`;
+
+  if (isSupabaseEnabled()) {
+    await supabaseRequest(
+      `/storage/v1/object/${encodeURIComponent(SUPABASE_RECEIPT_BUCKET)}/${storedName
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": parsed.mimeType,
+          "x-upsert": "true"
+        },
+        body: parsed.buffer
+      }
+    );
+
+    return {
+      storage: "supabase",
+      bucket: SUPABASE_RECEIPT_BUCKET,
+      originalName: parsed.originalName,
+      mimeType: parsed.mimeType,
+      size: parsed.buffer.length,
+      storedName,
+      uploadedAt: nowIso()
+    };
+  }
+
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
   await fs.writeFile(path.join(UPLOAD_DIR, storedName), parsed.buffer);
 
   return {
+    storage: "local",
     originalName: parsed.originalName,
     mimeType: parsed.mimeType,
     size: parsed.buffer.length,
     storedName,
     uploadedAt: nowIso()
   };
+}
+
+async function readReceiptAttachment(claim) {
+  if (claim.receipt?.storage === "supabase") {
+    const storedName = String(claim.receipt.storedName || "");
+    const response = await supabaseRequest(
+      `/storage/v1/object/${encodeURIComponent(claim.receipt.bucket || SUPABASE_RECEIPT_BUCKET)}/${storedName
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`
+    );
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  return fs.readFile(path.join(UPLOAD_DIR, claim.receipt.storedName));
 }
 
 function visibleLeaveRequests(db, user) {
@@ -593,7 +903,7 @@ function dashboard(db, user) {
   };
 }
 
-function createEmployee(db, body) {
+async function createEmployee(db, body) {
   const name = String(body.name || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
   const role = String(body.role || "employee");
@@ -645,7 +955,7 @@ function createEmployee(db, body) {
     ...createPassword(password)
   };
   db.users.push(employee);
-  addEmail(db, {
+  await addEmail(db, {
     recipientId: employee.id,
     type: "employee_created",
     subject: "CLS account created",
@@ -768,17 +1078,25 @@ async function createLeaveRequest(db, user, body) {
   };
 
   db.leaveRequests.unshift(request);
-  addEmail(db, {
+  await addEmail(db, {
     recipientId: user.managerId,
     type: "leave_submitted",
     subject: `Leave request pending approval: ${user.name}`,
     body: `${user.name} has applied for ${days} deductible working day(s) of ${type} from ${startDate} to ${endDate}.`,
     relatedId: request.id
+  }, {
+    attachments: [
+      makeLeaveCalendarAttachment({
+        request,
+        employee: user,
+        status: "TENTATIVE"
+      })
+    ]
   });
   return request;
 }
 
-function decideLeaveRequest(db, reviewer, requestId, body) {
+async function decideLeaveRequest(db, reviewer, requestId, body) {
   const request = db.leaveRequests.find((item) => item.id === requestId);
   if (!request) {
     const error = new Error("Leave request was not found.");
@@ -803,12 +1121,25 @@ function decideLeaveRequest(db, reviewer, requestId, body) {
   request.updatedAt = decidedAt;
 
   const employee = getUser(db, request.employeeId);
-  addEmail(db, {
+  const attachments = request.status === "approved" && employee
+    ? [
+        makeLeaveCalendarAttachment({
+          request,
+          employee,
+          reviewer,
+          status: "CONFIRMED"
+        })
+      ]
+    : [];
+
+  await addEmail(db, {
     recipientId: request.employeeId,
     type: "leave_decided",
     subject: `Leave request ${decisionLabel(request.status).toLowerCase()}`,
     body: `Your leave request for ${request.days} working day(s) from ${request.startDate} to ${request.endDate} was ${decisionLabel(request.status).toLowerCase()} by ${reviewer.name}.`,
     relatedId: request.id
+  }, {
+    attachments
   });
   console.log(`[Leave decision] ${employee ? employee.name : request.employeeId}: ${request.status}`);
   return request;
@@ -862,7 +1193,7 @@ async function createClaim(db, user, body) {
 
   db.medicalClaims.unshift(claim);
   const label = claimType === "medical" ? "Medical claim" : "General claim";
-  addEmail(db, {
+  await addEmail(db, {
     recipientId: user.managerId,
     type: "claim_submitted",
     subject: `${label} pending approval: ${user.name}`,
@@ -872,7 +1203,7 @@ async function createClaim(db, user, body) {
   return claim;
 }
 
-function decideClaim(db, reviewer, claimId, body) {
+async function decideClaim(db, reviewer, claimId, body) {
   const claim = db.medicalClaims.find((item) => item.id === claimId);
   if (!claim) {
     const error = new Error("Claim was not found.");
@@ -897,7 +1228,7 @@ function decideClaim(db, reviewer, claimId, body) {
   claim.updatedAt = decidedAt;
 
   const label = claim.claimType === "general" ? "General claim" : "Medical claim";
-  addEmail(db, {
+  await addEmail(db, {
     recipientId: claim.employeeId,
     type: "claim_decided",
     subject: `${label} ${decisionLabel(claim.status).toLowerCase()}`,
@@ -919,14 +1250,21 @@ async function handleApi(req, res, pathname) {
       return jsonResponse(res, 401, { error: "Email or password is incorrect." });
     }
     const token = crypto.randomBytes(32).toString("hex");
-    sessions.set(token, { userId: user.id, expiresAt: Date.now() + SESSION_TTL_MS });
+    const session = { token, userId: user.id, expiresAt: Date.now() + SESSION_TTL_MS, createdAt: nowIso() };
+    sessions.set(token, session);
+    db.sessions.unshift(session);
+    await saveDb(db);
     setSessionCookie(res, token);
     return jsonResponse(res, 200, { data: dashboard(db, user) });
   }
 
   if (req.method === "POST" && pathname === "/api/logout") {
     const token = parseCookies(req).cls_session;
-    if (token) sessions.delete(token);
+    if (token) {
+      sessions.delete(token);
+      db.sessions = db.sessions.filter((session) => session.token !== token);
+      await saveDb(db);
+    }
     clearSessionCookie(res);
     return jsonResponse(res, 200, { data: true });
   }
@@ -996,6 +1334,30 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: anniversaryAccrual });
   }
 
+  if ((req.method === "GET" || req.method === "POST") && pathname === "/api/cron/daily-maintenance") {
+    const cronSecret = process.env.CRON_SECRET;
+    const authHeader = req.headers.authorization || "";
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+      return jsonResponse(res, 401, { error: "Unauthorized." });
+    }
+
+    const holidays = await syncSingaporePublicHolidays({ forceRefresh: true });
+    const rollover = applyLeaveYearRollover(db);
+    const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
+    if (rollover.changed || anniversaryAccrual.changed) await saveDb(db);
+    return jsonResponse(res, 200, {
+      data: {
+        holidays: {
+          syncedAt: holidays.syncedAt,
+          count: holidays.holidays.length,
+          years: holidays.years
+        },
+        rollover,
+        anniversaryAccrual
+      }
+    });
+  }
+
   const user = requireUser(req, db);
 
   if (req.method === "GET" && pathname === "/api/dashboard") {
@@ -1004,7 +1366,7 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "POST" && pathname === "/api/employees") {
     requireAdmin(user);
-    const employee = createEmployee(db, body);
+    const employee = await createEmployee(db, body);
     await saveDb(db);
     return jsonResponse(res, 201, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
   }
@@ -1025,7 +1387,7 @@ async function handleApi(req, res, pathname) {
 
   const leaveDecisionMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/status$/);
   if (leaveDecisionMatch && req.method === "PATCH") {
-    const request = decideLeaveRequest(db, user, leaveDecisionMatch[1], body);
+    const request = await decideLeaveRequest(db, user, leaveDecisionMatch[1], body);
     await saveDb(db);
     return jsonResponse(res, 200, { data: { request, dashboard: dashboard(db, user) } });
   }
@@ -1041,8 +1403,7 @@ async function handleApi(req, res, pathname) {
       return jsonResponse(res, 404, { error: "No receipt is attached to this claim." });
     }
 
-    const receiptPath = path.join(UPLOAD_DIR, claim.receipt.storedName);
-    const receipt = await fs.readFile(receiptPath);
+    const receipt = await readReceiptAttachment(claim);
     res.writeHead(200, {
       "Content-Type": claim.receipt.mimeType || "application/octet-stream",
       "Content-Disposition": `inline; filename="${claim.receipt.originalName || "receipt"}"`,
@@ -1059,7 +1420,7 @@ async function handleApi(req, res, pathname) {
 
   const claimDecisionMatch = pathname.match(/^\/api\/(?:medical-claims|claims)\/([^/]+)\/status$/);
   if (claimDecisionMatch && req.method === "PATCH") {
-    const claim = decideClaim(db, user, claimDecisionMatch[1], body);
+    const claim = await decideClaim(db, user, claimDecisionMatch[1], body);
     await saveDb(db);
     return jsonResponse(res, 200, { data: { claim, dashboard: dashboard(db, user) } });
   }
