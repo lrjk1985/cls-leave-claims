@@ -36,6 +36,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
 const MAX_JSON_BYTES = 10_000_000;
 const MAX_RECEIPT_BYTES = 5_000_000;
+const RECEIPT_RETENTION_YEARS = 5;
 const RECEIPT_TYPE_ERROR = "Receipt must be a PDF, JPG, PNG, WebP, HEIC, or HEIF file.";
 const RECEIPT_MIME_TYPES = new Set([
   "application/pdf",
@@ -859,6 +860,15 @@ function safeReceiptName(name) {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
 }
 
+function safeLocalReceiptPath(storedName) {
+  const root = path.resolve(UPLOAD_DIR);
+  const filePath = path.resolve(root, String(storedName || ""));
+  if (!filePath.startsWith(`${root}${path.sep}`)) {
+    throw new Error("Receipt file path is invalid.");
+  }
+  return filePath;
+}
+
 function receiptExtension(name) {
   return path.extname(String(name || "")).toLowerCase();
 }
@@ -968,7 +978,7 @@ async function saveReceiptAttachment(claimId, receipt) {
   }
 
   await fs.mkdir(UPLOAD_DIR, { recursive: true });
-  await fs.writeFile(path.join(UPLOAD_DIR, storedName), parsed.buffer);
+  await fs.writeFile(safeLocalReceiptPath(storedName), parsed.buffer);
 
   return {
     storage: "local",
@@ -981,6 +991,12 @@ async function saveReceiptAttachment(claimId, receipt) {
 }
 
 async function readReceiptAttachment(claim) {
+  if (claim.receipt?.deletedAt) {
+    const error = new Error("Receipt has been removed under the 5-year retention policy.");
+    error.status = 410;
+    throw error;
+  }
+
   if (claim.receipt?.storage === "supabase") {
     const storedName = String(claim.receipt.storedName || "");
     const response = await supabaseRequest(
@@ -993,7 +1009,126 @@ async function readReceiptAttachment(claim) {
     return Buffer.from(arrayBuffer);
   }
 
-  return fs.readFile(path.join(UPLOAD_DIR, claim.receipt.storedName));
+  return fs.readFile(safeLocalReceiptPath(claim.receipt.storedName));
+}
+
+async function deleteReceiptAttachment(receipt) {
+  const storedName = String(receipt?.storedName || "");
+  if (!storedName || receipt.deletedAt) return false;
+
+  if (receipt.storage === "supabase") {
+    await supabaseRequest(
+      `/storage/v1/object/${encodeURIComponent(receipt.bucket || SUPABASE_RECEIPT_BUCKET)}`,
+      {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prefixes: [storedName] })
+      }
+    );
+    return true;
+  }
+
+  await fs.rm(safeLocalReceiptPath(storedName), { force: true });
+  return true;
+}
+
+function receiptRetentionCutoff(asOfDate = new Date()) {
+  const cutoff = asOfDate instanceof Date
+    ? new Date(asOfDate.getTime())
+    : assertIsoDate(String(asOfDate), "Retention date");
+  cutoff.setUTCHours(0, 0, 0, 0);
+  cutoff.setUTCFullYear(cutoff.getUTCFullYear() - RECEIPT_RETENTION_YEARS);
+  return cutoff;
+}
+
+function receiptReferenceDate(claim) {
+  const value = claim.receipt?.uploadedAt || claim.createdAt || claim.claimDate;
+  if (!value) return null;
+  const date = String(value).includes("T")
+    ? new Date(value)
+    : new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function activeReceiptClaims(db) {
+  return db.medicalClaims.filter((claim) => claim.receipt?.storedName && !claim.receipt.deletedAt);
+}
+
+function receiptStorageSummary(db, asOfDate = new Date()) {
+  const cutoff = receiptRetentionCutoff(asOfDate);
+  const summary = {
+    activeBytes: 0,
+    activeReceiptCount: 0,
+    deletedBytes: 0,
+    deletedReceiptCount: 0,
+    dueForDeletionCount: 0,
+    oldestActiveReceiptAt: null,
+    retentionYears: RECEIPT_RETENTION_YEARS,
+    maxReceiptBytes: MAX_RECEIPT_BYTES
+  };
+
+  for (const claim of db.medicalClaims) {
+    const receipt = claim.receipt;
+    if (!receipt) continue;
+    const size = Number(receipt.size || 0);
+    if (receipt.deletedAt) {
+      summary.deletedBytes += size;
+      summary.deletedReceiptCount += 1;
+      continue;
+    }
+    if (!receipt.storedName) continue;
+
+    summary.activeBytes += size;
+    summary.activeReceiptCount += 1;
+    const referenceDate = receiptReferenceDate(claim);
+    if (referenceDate && referenceDate < cutoff) summary.dueForDeletionCount += 1;
+    if (
+      referenceDate &&
+      (!summary.oldestActiveReceiptAt || referenceDate < new Date(summary.oldestActiveReceiptAt))
+    ) {
+      summary.oldestActiveReceiptAt = referenceDate.toISOString();
+    }
+  }
+
+  return summary;
+}
+
+async function applyReceiptRetention(db, asOfDate = new Date()) {
+  const cutoff = receiptRetentionCutoff(asOfDate);
+  const result = {
+    changed: false,
+    cutoff: cutoff.toISOString(),
+    retentionYears: RECEIPT_RETENTION_YEARS,
+    deleted: 0,
+    failed: 0,
+    errors: []
+  };
+
+  for (const claim of activeReceiptClaims(db)) {
+    const referenceDate = receiptReferenceDate(claim);
+    if (!referenceDate || referenceDate >= cutoff) continue;
+
+    try {
+      await deleteReceiptAttachment(claim.receipt);
+      claim.receipt = {
+        ...claim.receipt,
+        deletedAt: nowIso(),
+        deletedReason: `${RECEIPT_RETENTION_YEARS}-year retention policy`
+      };
+      claim.updatedAt = nowIso();
+      result.changed = true;
+      result.deleted += 1;
+    } catch (error) {
+      result.failed += 1;
+      result.errors.push({
+        claimId: claim.id,
+        receipt: claim.receipt.originalName || claim.receipt.storedName,
+        error: error.message
+      });
+    }
+  }
+
+  return result;
 }
 
 function visibleLeaveRequests(db, user) {
@@ -1031,6 +1166,7 @@ function dashboard(db, user) {
     leaveSummary: leaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
     leaveRequests,
     medicalClaims,
     emails,
@@ -1486,6 +1622,24 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: anniversaryAccrual });
   }
 
+  if ((req.method === "GET" || req.method === "POST") && pathname === "/api/run-receipt-retention") {
+    const cronSecret = process.env.CRON_SECRET;
+    if (cronSecret) {
+      const authHeader = req.headers.authorization || "";
+      if (authHeader !== `Bearer ${cronSecret}`) {
+        return jsonResponse(res, 401, { error: "Unauthorized." });
+      }
+    } else {
+      const admin = requireUser(req, db);
+      requireAdmin(admin);
+    }
+
+    const asOfDate = body.asOfDate ? assertIsoDate(String(body.asOfDate), "Retention date") : new Date();
+    const receiptRetention = await applyReceiptRetention(db, asOfDate);
+    if (receiptRetention.changed) await saveDb(db);
+    return jsonResponse(res, 200, { data: receiptRetention });
+  }
+
   if ((req.method === "GET" || req.method === "POST") && pathname === "/api/cron/daily-maintenance") {
     const cronSecret = process.env.CRON_SECRET;
     const authHeader = req.headers.authorization || "";
@@ -1496,7 +1650,8 @@ async function handleApi(req, res, pathname) {
     const holidays = await syncSingaporePublicHolidays({ forceRefresh: true });
     const rollover = applyLeaveYearRollover(db);
     const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
-    if (rollover.changed || anniversaryAccrual.changed) await saveDb(db);
+    const receiptRetention = await applyReceiptRetention(db);
+    if (rollover.changed || anniversaryAccrual.changed || receiptRetention.changed) await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
         holidays: {
@@ -1505,7 +1660,8 @@ async function handleApi(req, res, pathname) {
           years: holidays.years
         },
         rollover,
-        anniversaryAccrual
+        anniversaryAccrual,
+        receiptRetention
       }
     });
   }
@@ -1560,6 +1716,9 @@ async function handleApi(req, res, pathname) {
     }
     if (!claim.receipt?.storedName) {
       return jsonResponse(res, 404, { error: "No receipt is attached to this claim." });
+    }
+    if (claim.receipt.deletedAt) {
+      return jsonResponse(res, 410, { error: "Receipt has been removed under the 5-year retention policy." });
     }
 
     const receipt = await readReceiptAttachment(claim);

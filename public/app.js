@@ -50,6 +50,14 @@ function money(value) {
   }).format(Number(value || 0));
 }
 
+function fileSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
+  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(2)} MB`;
+  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
 function claimTypeLabel(type) {
   return type === "general" ? "General Claim" : "Medical Claim";
 }
@@ -457,6 +465,43 @@ function renderMetrics() {
   `;
 }
 
+function renderAdminReceiptStorage() {
+  const summary = state.dashboard.receiptStorageSummary;
+  if (!isAdmin() || !summary) return "";
+
+  return `
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Receipt Storage</h2>
+        <div class="storage-meta">
+          <span>Retention ${summary.retentionYears} years</span>
+          <span>Max ${fileSize(summary.maxReceiptBytes)} per receipt</span>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="storage-metrics">
+          <div class="metric">
+            <div class="metric-label">Active Storage</div>
+            <div class="metric-value money-value">${fileSize(summary.activeBytes)}</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Active Receipts</div>
+            <div class="metric-value">${summary.activeReceiptCount}</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Due Cleanup</div>
+            <div class="metric-value">${summary.dueForDeletionCount}</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">Removed</div>
+            <div class="metric-value">${summary.deletedReceiptCount}</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderOverview() {
   const pendingLeaves = state.dashboard.leaveRequests.filter((item) => item.status === "pending" && isReviewer(item));
   const pendingClaims = state.dashboard.medicalClaims.filter((item) => item.status === "pending" && isReviewer(item));
@@ -464,6 +509,7 @@ function renderOverview() {
     ${renderTopbar("Overview", "Leave balances, pending approvals, and recent activity.")}
     <div class="content-grid">
       ${renderMetrics()}
+      ${renderAdminReceiptStorage()}
       <div class="split">
         <section class="section">
           <div class="section-header">
@@ -693,19 +739,19 @@ function renderLeaveTable(items, approvalsMode) {
         <tbody>
           ${items.map((item) => `
             <tr>
-              <td>
+              <td data-label="Employee">
                 <strong>${escapeHtml(employeeName(item.employeeId))}</strong>
                 <div class="muted">${escapeHtml(item.reason || "")}</div>
               </td>
-              <td>
+              <td data-label="Dates">
                 ${dateText(item.startDate)}<br>
                 <span class="muted">${dateText(item.endDate)}</span>
                 ${excludedDatesText(item)}
               </td>
-              <td>${item.days}</td>
-              <td>${escapeHtml(item.type)}</td>
-              <td>${statusPill(item.status)}</td>
-              <td>
+              <td data-label="Deducted Days">${item.days}</td>
+              <td data-label="Type">${escapeHtml(item.type)}</td>
+              <td data-label="Status">${statusPill(item.status)}</td>
+              <td data-label="${approvalsMode ? "Decision" : "Approver"}">
                 ${approvalsMode ? renderDecisionControls("leave", item) : escapeHtml(employeeName(item.managerId))}
                 ${item.decisionNote ? `<div class="muted">${escapeHtml(item.decisionNote)}</div>` : ""}
               </td>
@@ -714,6 +760,20 @@ function renderLeaveTable(items, approvalsMode) {
         </tbody>
       </table>
     </div>
+  `;
+}
+
+function renderReceiptCell(item) {
+  if (item.receipt?.deletedAt) {
+    return `
+      <span class="muted">Removed</span>
+      <div class="muted">5-year retention policy</div>
+    `;
+  }
+
+  return `
+    ${item.receipt ? `<a class="receipt-link" href="/api/claims/${item.id}/receipt" target="_blank" rel="noreferrer">${escapeHtml(item.receipt.originalName || "Receipt")}</a>` : "-"}
+    ${item.receiptRef ? `<div class="muted">${escapeHtml(item.receiptRef)}</div>` : ""}
   `;
 }
 
@@ -735,22 +795,21 @@ function renderClaimsTable(items, approvalsMode) {
         <tbody>
           ${items.map((item) => `
             <tr>
-              <td>
+              <td data-label="Employee">
                 <strong>${escapeHtml(employeeName(item.employeeId))}</strong>
                 <div class="muted">${dateText(item.claimDate)}</div>
               </td>
-              <td>
+              <td data-label="Claim">
                 <strong>${escapeHtml(claimTypeLabel(item.claimType))}</strong>
                 <div>${escapeHtml(item.provider)}</div>
                 <div class="muted">${escapeHtml(item.category)} - ${escapeHtml(item.description)}</div>
               </td>
-              <td>${money(item.amount)}</td>
-              <td>
-                ${item.receipt ? `<a class="receipt-link" href="/api/claims/${item.id}/receipt" target="_blank" rel="noreferrer">${escapeHtml(item.receipt.originalName || "Receipt")}</a>` : "-"}
-                ${item.receiptRef ? `<div class="muted">${escapeHtml(item.receiptRef)}</div>` : ""}
+              <td data-label="Amount">${money(item.amount)}</td>
+              <td data-label="Receipt">
+                ${renderReceiptCell(item)}
               </td>
-              <td>${statusPill(item.status)}</td>
-              <td>
+              <td data-label="Status">${statusPill(item.status)}</td>
+              <td data-label="${approvalsMode ? "Decision" : "Approver"}">
                 ${approvalsMode ? renderDecisionControls("claim", item) : escapeHtml(employeeName(item.managerId))}
                 ${item.decisionNote ? `<div class="muted">${escapeHtml(item.decisionNote)}</div>` : ""}
               </td>

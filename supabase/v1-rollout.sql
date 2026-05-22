@@ -29,9 +29,19 @@ before update on public.cls_app_state
 for each row
 execute function public.set_cls_app_state_updated_at();
 
-insert into storage.buckets (id, name, public)
-values ('claim-receipts', 'claim-receipts', false)
-on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'claim-receipts',
+  'claim-receipts',
+  false,
+  5000000,
+  array['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']
+)
+on conflict (id) do update
+set
+  public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 -- Receipt files are accessed only by trusted server-side code with the Supabase
 -- service role key. Do not expose that key in browser code or commit it to Git.

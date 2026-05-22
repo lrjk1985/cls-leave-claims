@@ -12,7 +12,7 @@ This build uses a local JSON data store on a developer machine. In production, t
 
 ## Supabase
 
-Apply `supabase/v1-rollout.sql` to create the V1 production table and private `claim-receipts` bucket.
+Apply `supabase/v1-rollout.sql` to create the V1 production table and private `claim-receipts` bucket. The receipt bucket is configured for PDF, JPG, PNG, WebP, HEIC, and HEIF uploads up to 5 MB.
 
 The app expects these Vercel environment variables:
 
@@ -27,6 +27,10 @@ Keep the service role key server-side only. Do not expose it in browser code or 
 The app syncs Singapore public holidays from MOM's consolidated data.gov.sg dataset and caches the result locally. Leave applications exclude Saturdays, Sundays, gazetted public holidays, and the next working day when a public holiday falls on Sunday.
 
 Production uses the Vercel Cron Job in `vercel.json`, which calls `GET /api/cron/daily-maintenance` every day at 12:05 AM Singapore time. This keeps public holidays refreshed without relying on a yearly manual update.
+
+## Receipt Storage
+
+Claim receipts remain capped at 5 MB per upload. Admins can see approximate active receipt storage in the app Overview. Daily maintenance deletes only receipt files older than 5 years; the claim history remains in the system with the receipt marked as removed by retention policy.
 
 ## Leave Year Rollover
 

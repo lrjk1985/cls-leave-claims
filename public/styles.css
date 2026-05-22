@@ -271,6 +271,22 @@ button {
   overflow-wrap: anywhere;
 }
 
+.storage-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.storage-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .section {
   background: var(--paper);
   border: 1px solid var(--line);
@@ -443,13 +459,13 @@ textarea:focus {
 }
 
 .table-wrap {
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 760px;
+  table-layout: fixed;
 }
 
 th,
@@ -458,6 +474,7 @@ td {
   text-align: left;
   border-bottom: 1px solid var(--line);
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 th {
@@ -503,9 +520,12 @@ tr:last-child td {
 }
 
 .receipt-link {
+  display: inline-block;
+  max-width: 100%;
   color: var(--blue);
   font-weight: 800;
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 
 .receipt-link:hover {
@@ -571,25 +591,27 @@ tr:last-child td {
 .decision-box {
   display: grid;
   gap: 8px;
-  min-width: 260px;
+  min-width: 0;
 }
 
 .employee-directory {
-  overflow-x: auto;
+  display: grid;
+  gap: 14px;
 }
 
 .employee-row {
   display: grid;
-  min-width: 1320px;
-  grid-template-columns: 1.05fr 1.25fr 0.75fr 1fr 0.82fr 0.7fr 0.72fr 0.72fr 0.55fr 0.55fr;
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
   align-items: end;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
 }
 
 .employee-row:last-child {
-  border-bottom: 0;
+  border-bottom: 1px solid var(--line);
 }
 
 .employee-row input,
@@ -639,10 +661,6 @@ tr:last-child td {
     grid-template-columns: 1fr 1fr;
   }
 
-  .employee-row {
-    grid-template-columns: 1fr 1fr;
-  }
-
   .directory-tools {
     width: 100%;
     justify-content: flex-start;
@@ -665,7 +683,73 @@ tr:last-child td {
   .metrics,
   .detail-grid,
   .form-grid,
-  .form-grid.three,
+  .form-grid.three {
+    grid-template-columns: 1fr;
+  }
+
+  .table-wrap {
+    overflow-x: visible;
+  }
+
+  table,
+  thead,
+  tbody,
+  tr,
+  th,
+  td {
+    display: block;
+  }
+
+  table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  tr {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+  }
+
+  td {
+    display: grid;
+    grid-template-columns: minmax(96px, 34%) minmax(0, 1fr);
+    gap: 12px;
+    border-bottom: 1px solid var(--line);
+    padding: 12px 14px;
+  }
+
+  tr:last-child td {
+    border-bottom: 1px solid var(--line);
+  }
+
+  td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  td:last-child,
+  tr:last-child td:last-child {
+    border-bottom: 0;
+  }
+
+  .decision-box {
+    width: 100%;
+  }
+
   .employee-row {
     grid-template-columns: 1fr;
   }
