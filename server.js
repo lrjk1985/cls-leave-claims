@@ -808,7 +808,7 @@ async function deliverEmail(email, options = {}) {
 
   const from = process.env.EMAIL_FROM || "CLS Leave & Claims <onboarding@resend.dev>";
   const appUrl = process.env.APP_URL;
-  const body = appUrl ? `${email.body}\n\nOpen CLS Leave & Claims: ${appUrl}` : email.body;
+  const body = appUrl ? `${email.body}\n\nTo Administer, please open CLS Leave & Claims: ${appUrl}` : email.body;
   const payload = {
     from,
     to: [email.to],
@@ -1361,7 +1361,11 @@ async function createLeaveRequest(db, user, body) {
     recipientId: user.managerId,
     type: "leave_submitted",
     subject: `Leave request pending approval: ${user.name}`,
-    body: `${user.name} has applied for ${days} deductible working day(s) of ${type} from ${startDate} to ${endDate}.`,
+    body: [
+      `${user.name} has applied for ${days} deductible working day(s) of ${type} from ${startDate} to ${endDate}.`,
+      "Please review the leave request in CLS Leave & Claims.",
+      `Use the attached calendar file (${user.name} on leave) to add this leave period to your calendar.`
+    ].join("\n\n"),
     relatedId: request.id
   }, {
     attachments: [
@@ -1415,7 +1419,12 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
     recipientId: request.employeeId,
     type: "leave_decided",
     subject: `Leave request ${decisionLabel(request.status).toLowerCase()}`,
-    body: `Your leave request for ${request.days} working day(s) from ${request.startDate} to ${request.endDate} was ${decisionLabel(request.status).toLowerCase()} by ${reviewer.name}.`,
+    body: [
+      `Your leave request for ${request.days} working day(s) from ${request.startDate} to ${request.endDate} was ${decisionLabel(request.status).toLowerCase()} by ${reviewer.name}.`,
+      request.status === "approved"
+        ? "Use the attached calendar file to add your approved leave to your calendar."
+        : "No calendar file is attached because this leave request was not approved."
+    ].join("\n\n"),
     relatedId: request.id
   }, {
     attachments
