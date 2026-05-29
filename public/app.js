@@ -7,20 +7,40 @@ const state = {
       status: "all",
       year: String(new Date().getFullYear()),
       query: "",
-      visible: 10
+      items: [],
+      total: 0,
+      years: [String(new Date().getFullYear())],
+      loading: false,
+      loadedKey: "",
+      requestKey: "",
+      requestId: 0
     },
     claim: {
       status: "all",
       year: String(new Date().getFullYear()),
       category: "all",
       query: "",
-      visible: 10
+      items: [],
+      total: 0,
+      years: [String(new Date().getFullYear())],
+      loading: false,
+      loadedKey: "",
+      requestKey: "",
+      requestId: 0
     }
+  },
+  mail: {
+    items: [],
+    total: 0,
+    loading: false,
+    loaded: false,
+    requestId: 0
   }
 };
 
 const app = document.querySelector("#app");
 const HISTORY_PAGE_SIZE = 10;
+const MAIL_PAGE_SIZE = 20;
 const MAX_RECEIPT_BYTES = 5_000_000;
 const RECEIPT_HELP_TEXT = "PDF, JPG, PNG, WebP, HEIC, or HEIF. Max 5 MB.";
 const RECEIPT_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif";
@@ -107,12 +127,15 @@ function showToast(message, type = "ok") {
 }
 
 async function api(path, options = {}) {
+  const headers = options.body instanceof FormData
+    ? { ...(options.headers || {}) }
+    : {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      };
   const response = await fetch(path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
+    headers
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -121,12 +144,35 @@ async function api(path, options = {}) {
   return payload.data;
 }
 
+function resetHistoryResults(kind = null) {
+  const kinds = kind ? [kind] : ["leave", "claim"];
+  kinds.forEach((historyKind) => {
+    const filters = state.history[historyKind];
+    filters.items = [];
+    filters.total = 0;
+    filters.loading = false;
+    filters.loadedKey = "";
+    filters.requestKey = "";
+    filters.requestId = (filters.requestId || 0) + 1;
+  });
+}
+
+function resetMailResults() {
+  state.mail.items = [];
+  state.mail.total = 0;
+  state.mail.loading = false;
+  state.mail.loaded = false;
+  state.mail.requestId = (state.mail.requestId || 0) + 1;
+}
+
 function updateDashboard(data) {
   if (data.dashboard) {
     state.dashboard = data.dashboard;
   } else {
     state.dashboard = data;
   }
+  resetHistoryResults();
+  resetMailResults();
   render();
 }
 
@@ -154,51 +200,113 @@ function pendingApprovalCount() {
   return counts.pendingLeave + counts.pendingClaims;
 }
 
-function historyYear(kind, item) {
-  if (kind === "leave") {
-    return String(item.leaveYear || item.startDate?.slice(0, 4) || currentYearText());
-  }
-  return String(item.claimDate?.slice(0, 4) || currentYearText());
-}
-
-function historyYears(kind, items) {
-  const years = new Set([currentYearText()]);
-  items.forEach((item) => years.add(historyYear(kind, item)));
-  return [...years].filter(Boolean).sort((a, b) => Number(b) - Number(a));
-}
-
-function historySearchText(kind, item) {
-  const shared = [
-    employeeName(item.employeeId),
-    employeeName(item.managerId),
-    statusLabel(item.status)
-  ];
-
-  if (kind === "leave") {
-    shared.push(item.type, item.reason, item.startDate, item.endDate, item.days);
-  } else {
-    shared.push(claimTypeLabel(item.claimType), item.category, item.provider, item.description, item.claimDate, item.amount);
-  }
-
-  return shared.join(" ").toLowerCase();
-}
-
-function claimHistoryCategory(item) {
-  return item.claimType === "general" ? "Others" : "Medical";
-}
-
-function filteredHistoryItems(kind, items) {
+function historyFilterKey(kind) {
   const filters = state.history[kind];
-  const query = filters.query.trim().toLowerCase();
-
-  return items.filter((item) => {
-    if (item.status === "pending") return false;
-    if (filters.status !== "all" && item.status !== filters.status) return false;
-    if (filters.year !== "all" && historyYear(kind, item) !== filters.year) return false;
-    if (kind === "claim" && filters.category !== "all" && claimHistoryCategory(item) !== filters.category) return false;
-    if (query && !historySearchText(kind, item).includes(query)) return false;
-    return true;
+  return JSON.stringify({
+    status: filters.status,
+    year: filters.year,
+    category: kind === "claim" ? filters.category : "",
+    query: filters.query.trim().toLowerCase()
   });
+}
+
+function historyEndpoint(kind) {
+  return kind === "leave" ? "/api/history/leave" : "/api/history/claims";
+}
+
+function historyQuery(kind, offset) {
+  const filters = state.history[kind];
+  const params = new URLSearchParams({
+    status: filters.status,
+    year: filters.year,
+    query: filters.query.trim(),
+    offset: String(offset),
+    limit: String(HISTORY_PAGE_SIZE)
+  });
+  if (kind === "claim") params.set("category", filters.category);
+  return params.toString();
+}
+
+async function loadHistory(kind, options = {}) {
+  const filters = state.history[kind];
+  if (!filters || filters.loading) return;
+
+  const key = historyFilterKey(kind);
+  const append = options.append && filters.loadedKey === key;
+  const offset = append ? filters.items.length : 0;
+  const requestId = (filters.requestId || 0) + 1;
+  filters.requestId = requestId;
+  filters.loading = true;
+  filters.requestKey = key;
+  if (!append) {
+    filters.items = [];
+    filters.total = 0;
+    filters.loadedKey = key;
+  }
+
+  try {
+    const data = await api(`${historyEndpoint(kind)}?${historyQuery(kind, offset)}`);
+    if (filters.requestId !== requestId || historyFilterKey(kind) !== key) return;
+    filters.items = append ? [...filters.items, ...data.items] : data.items;
+    filters.total = data.total;
+    filters.years = data.years?.length ? data.years : [currentYearText()];
+    filters.loadedKey = key;
+  } catch (error) {
+    if (filters.requestId === requestId && historyFilterKey(kind) === key) showToast(error.message, "error");
+  } finally {
+    if (filters.requestId === requestId && filters.requestKey === key) {
+      filters.loading = false;
+      filters.requestKey = "";
+      render();
+    }
+  }
+}
+
+function ensureHistoryLoaded(kind) {
+  const filters = state.history[kind];
+  if (!filters || filters.loading) return;
+  if (filters.loadedKey !== historyFilterKey(kind)) {
+    loadHistory(kind);
+  }
+}
+
+async function loadMail(options = {}) {
+  if (state.mail.loading) return;
+
+  const append = Boolean(options.append);
+  const offset = append ? state.mail.items.length : 0;
+  const requestId = (state.mail.requestId || 0) + 1;
+  state.mail.requestId = requestId;
+  state.mail.loading = true;
+  if (!append) {
+    state.mail.items = [];
+    state.mail.total = 0;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      offset: String(offset),
+      limit: String(MAIL_PAGE_SIZE)
+    });
+    const data = await api(`/api/history/emails?${params.toString()}`);
+    if (state.mail.requestId !== requestId) return;
+    state.mail.items = append ? [...state.mail.items, ...data.items] : data.items;
+    state.mail.total = data.total;
+    state.mail.loaded = true;
+  } catch (error) {
+    if (state.mail.requestId === requestId) showToast(error.message, "error");
+  } finally {
+    if (state.mail.requestId === requestId) {
+      state.mail.loading = false;
+      render();
+    }
+  }
+}
+
+function ensureMailLoaded() {
+  if (!state.mail.loading && !state.mail.loaded) {
+    loadMail();
+  }
 }
 
 function renderSelectOptions(options, selected) {
@@ -211,12 +319,12 @@ function renderSelectOptions(options, selected) {
     .join("");
 }
 
-function renderHistoryFilters(kind, items) {
+function renderHistoryFilters(kind) {
   const filters = state.history[kind];
   const title = kind === "leave" ? "Leave History" : "Claim History";
   const years = [
     { value: "all", label: "All Years" },
-    ...historyYears(kind, items).map((year) => ({ value: year, label: year }))
+    ...(filters.years || [currentYearText()]).map((year) => ({ value: year, label: year }))
   ];
   const statusOptions = [
     { value: "all", label: "All Status" },
@@ -261,38 +369,33 @@ function renderHistoryFilters(kind, items) {
   `;
 }
 
-function renderHistorySection(kind, items) {
+function renderHistorySection(kind) {
+  ensureHistoryLoaded(kind);
   const filters = state.history[kind];
-  const filtered = filteredHistoryItems(kind, items);
-  const visible = filtered.slice(0, filters.visible);
-  const table = kind === "leave" ? renderLeaveTable(visible, false) : renderClaimsTable(visible, false);
-  const remaining = filtered.length - visible.length;
+  const items = filters.items || [];
+  const table = filters.loading && !items.length
+    ? `<div class="empty">Loading history...</div>`
+    : kind === "leave"
+      ? renderLeaveTable(items, false)
+      : renderClaimsTable(items, false);
+  const remaining = Math.max(0, Number(filters.total || 0) - items.length);
 
   return `
     <section class="section">
       <div class="section-header history-header">
-        ${renderHistoryFilters(kind, items)}
+        ${renderHistoryFilters(kind)}
       </div>
       ${table}
       ${remaining > 0 ? `
         <div class="history-more">
           <button class="button small" data-action="history-load-more" data-kind="${kind}">
-            Load More
+            ${filters.loading ? "Loading..." : "Load More"}
           </button>
-          <span class="muted">${visible.length} of ${filtered.length} shown</span>
+          <span class="muted">${items.length} of ${filters.total} shown</span>
         </div>
       ` : ""}
     </section>
   `;
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(reader.result));
-    reader.addEventListener("error", () => reject(new Error("Receipt could not be read.")));
-    reader.readAsDataURL(file);
-  });
 }
 
 function receiptExtension(name) {
@@ -335,22 +438,62 @@ function setFormSubmitting(form, submitting, label = "Submitting...") {
   });
 }
 
+async function uploadReceiptToSignedUrl(upload, file) {
+  const response = await fetch(upload.signedUrl, {
+    method: upload.method || "PUT",
+    headers: {
+      "Content-Type": upload.mimeType || file.type || "application/octet-stream",
+      "cache-control": "3600"
+    },
+    body: file
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Receipt upload failed: ${text || response.statusText}`);
+  }
+}
+
 async function claimFormPayload(form, body) {
-  body = { ...body };
-  body.category = body.category === "Others" ? "Others" : "Medical";
-  body.claimType = body.category === "Medical" ? "medical" : "general";
+  const category = body.category === "Others" ? "Others" : "Medical";
+  const claimType = category === "Medical" ? "medical" : "general";
   const file = form.querySelector("input[type='file'][name='receipt']")?.files?.[0];
   if (!file) {
     throw new Error("Please upload a receipt.");
   }
   assertReceiptFile(file);
 
-  body.receipt = {
-    name: file.name,
-    type: file.type || "application/octet-stream",
-    dataUrl: await fileToDataUrl(file)
-  };
-  return body;
+  const claimBody = { ...body, category, claimType };
+  delete claimBody.receipt;
+
+  const upload = await api("/api/claim-receipts/upload-url", {
+    method: "POST",
+    body: JSON.stringify({
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      size: file.size
+    })
+  });
+  if (upload.direct) {
+    await uploadReceiptToSignedUrl(upload, file);
+    claimBody.receiptUpload = {
+      storage: upload.storage,
+      bucket: upload.bucket,
+      storedName: upload.storedName,
+      originalName: upload.originalName,
+      mimeType: upload.mimeType,
+      size: upload.size
+    };
+    return {
+      body: JSON.stringify(claimBody),
+      claimType
+    };
+  }
+
+  const formData = new FormData(form);
+  formData.set("category", category);
+  formData.set("claimType", claimType);
+  return { body: formData, claimType };
 }
 
 function renderLogin() {
@@ -583,7 +726,7 @@ function renderLeave() {
         </div>
         ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, false) : `<div class="empty">No pending leave applications.</div>`}
       </section>
-      ${renderHistorySection("leave", leaveRequests)}
+      ${renderHistorySection("leave")}
     </div>
   `);
 }
@@ -669,7 +812,7 @@ function renderClaims() {
         </div>
         ${pendingClaims.length ? renderClaimsTable(pendingClaims, false) : `<div class="empty">No pending claims.</div>`}
       </section>
-      ${renderHistorySection("claim", claims)}
+      ${renderHistorySection("claim")}
     </div>
   `);
 }
@@ -821,13 +964,22 @@ function renderClaimsTable(items, approvalsMode) {
   `;
 }
 
-function managerOptions(selectedId, currentId = "") {
+function employeeManagerChoices() {
   const employees = state.dashboard.allEmployees || [];
-  return `<option value="">Unassigned</option>${employees
-    .filter((employee) => employee.id !== currentId && employee.active)
+  return employees
+    .filter((employee) => employee.active)
+    .map((employee) => ({
+      id: employee.id,
+      label: `${escapeHtml(employee.name)} (${roleName(employee.role)})`
+    }));
+}
+
+function managerOptions(choices, selectedId, currentId = "") {
+  return `<option value="">Unassigned</option>${choices
+    .filter((employee) => employee.id !== currentId)
     .map((employee) => `
-      <option value="${employee.id}" ${employee.id === selectedId ? "selected" : ""}>
-        ${escapeHtml(employee.name)} (${roleName(employee.role)})
+      <option value="${escapeHtml(employee.id)}" ${employee.id === selectedId ? "selected" : ""}>
+        ${employee.label}
       </option>
     `)
     .join("")}`;
@@ -858,6 +1010,7 @@ function employeeRowBody(row) {
 }
 
 function renderEmployees() {
+  const managerChoices = employeeManagerChoices();
   renderShell(`
     ${renderTopbar("Employees", "Administer employees, roles, direct reports, and leave entitlement.")}
     <div class="content-grid">
@@ -885,7 +1038,7 @@ function renderEmployees() {
             </div>
             <div class="field">
               <label for="employee-manager">Direct Report / Approver</label>
-              <select id="employee-manager" name="managerId">${managerOptions("")}</select>
+              <select id="employee-manager" name="managerId">${managerOptions(managerChoices, "")}</select>
             </div>
             <div class="field">
               <label for="employee-service-start">Service Start</label>
@@ -942,7 +1095,7 @@ function renderEmployees() {
               </div>
               <div class="field">
                 <label>Direct Report</label>
-                <select data-field="managerId">${managerOptions(employee.managerId, employee.id)}</select>
+                <select data-field="managerId">${managerOptions(managerChoices, employee.managerId, employee.id)}</select>
               </div>
               <div class="field">
                 <label>Service Start</label>
@@ -997,10 +1150,21 @@ function renderMailList(emails) {
 }
 
 function renderMail() {
+  ensureMailLoaded();
+  const emails = state.mail.items;
+  const remaining = Math.max(0, Number(state.mail.total || 0) - emails.length);
   renderShell(`
     ${renderTopbar("Email Outbox", "Local email notifications generated by leave and claim workflows.")}
     <section class="section">
-      ${renderMailList(state.dashboard.emails)}
+      ${state.mail.loading && !emails.length ? `<div class="empty">Loading email notifications...</div>` : renderMailList(emails)}
+      ${remaining > 0 ? `
+        <div class="history-more">
+          <button class="button small" data-action="mail-load-more">
+            ${state.mail.loading ? "Loading..." : "Load More"}
+          </button>
+          <span class="muted">${emails.length} of ${state.mail.total} shown</span>
+        </div>
+      ` : ""}
     </section>
   `);
 }
@@ -1111,14 +1275,14 @@ document.addEventListener("submit", async (event) => {
       showToast("Leave application submitted.");
     }
     if (formType === "claim") {
-      const claimBody = await claimFormPayload(form, body);
+      const claimPayload = await claimFormPayload(form, body);
       const data = await api("/api/claims", {
         method: "POST",
-        body: JSON.stringify(claimBody)
+        body: claimPayload.body
       });
       form.reset();
       updateDashboard(data);
-      showToast(`${claimTypeLabel(claimBody.claimType)} submitted.`);
+      showToast(`${claimTypeLabel(claimPayload.claimType)} submitted.`);
     }
     if (formType === "employee") {
       const data = await api("/api/employees", {
@@ -1198,21 +1362,26 @@ document.addEventListener("click", async (event) => {
       }
 
       button.disabled = true;
-      let latestData = null;
-      for (const row of rows) {
-        latestData = await api(`/api/employees/${row.dataset.employeeId}`, {
-          method: "PATCH",
-          body: JSON.stringify(employeeRowBody(row))
-        });
-      }
-      updateDashboard(latestData);
+      const data = await api("/api/employees/bulk", {
+        method: "PATCH",
+        body: JSON.stringify({
+          employees: rows.map((row) => ({
+            id: row.dataset.employeeId,
+            ...employeeRowBody(row)
+          }))
+        })
+      });
+      updateDashboard(data);
       showToast(`${rows.length} employee record${rows.length === 1 ? "" : "s"} saved.`);
     }
 
     if (action === "history-load-more") {
       const kind = button.dataset.kind;
-      state.history[kind].visible += HISTORY_PAGE_SIZE;
-      render();
+      await loadHistory(kind, { append: true });
+    }
+
+    if (action === "mail-load-more") {
+      await loadMail({ append: true });
     }
   } catch (error) {
     showToast(error.message, "error");
@@ -1245,7 +1414,7 @@ function updateHistoryFilter(field) {
   const cursorStart = field.selectionStart;
   const cursorEnd = field.selectionEnd;
   state.history[kind][filterField] = field.value;
-  state.history[kind].visible = HISTORY_PAGE_SIZE;
+  resetHistoryResults(kind);
   render();
 
   const nextField = document.getElementById(field.id);

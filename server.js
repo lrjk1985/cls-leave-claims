@@ -36,6 +36,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
 const MAX_JSON_BYTES = 10_000_000;
 const MAX_RECEIPT_BYTES = 5_000_000;
+const MAX_MULTIPART_BYTES = MAX_RECEIPT_BYTES + 1_000_000;
 const RECEIPT_RETENTION_YEARS = 5;
 const RECEIPT_TYPE_ERROR = "Receipt must be a PDF, JPG, PNG, WebP, HEIC, or HEIF file.";
 const RECEIPT_MIME_TYPES = new Set([
@@ -63,6 +64,9 @@ const RECEIPT_MIME_EXTENSIONS = new Map([
   ["image/heic", ".heic"],
   ["image/heif", ".heif"]
 ]);
+const HISTORY_DEFAULT_LIMIT = 10;
+const MAIL_DEFAULT_LIMIT = 20;
+const HISTORY_MAX_LIMIT = 50;
 const SUPABASE_STATE_KEY = "default";
 const SUPABASE_RECEIPT_BUCKET = process.env.SUPABASE_RECEIPT_BUCKET || "claim-receipts";
 const sessions = new Map();
@@ -168,19 +172,126 @@ function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", "cls_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
 }
 
-async function readJson(req) {
+async function readBody(req, maxBytes = MAX_JSON_BYTES) {
   const chunks = [];
   let total = 0;
   for await (const chunk of req) {
     total += chunk.length;
-    if (total > MAX_JSON_BYTES) {
+    if (total > maxBytes) {
       throw new Error("Request is too large.");
     }
     chunks.push(chunk);
   }
 
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return chunks.length ? Buffer.concat(chunks) : Buffer.alloc(0);
+}
+
+async function readJson(req) {
+  const buffer = await readBody(req, MAX_JSON_BYTES);
+  if (!buffer.length) return {};
+  return JSON.parse(buffer.toString("utf8"));
+}
+
+function multipartBoundary(contentType) {
+  const match = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  return match ? (match[1] || match[2] || "").trim() : "";
+}
+
+function parseMultipartHeaderValue(value) {
+  const result = {};
+  String(value || "")
+    .split(";")
+    .slice(1)
+    .forEach((part) => {
+      const index = part.indexOf("=");
+      if (index === -1) return;
+      const key = part.slice(0, index).trim().toLowerCase();
+      let fieldValue = part.slice(index + 1).trim();
+      if (fieldValue.startsWith('"') && fieldValue.endsWith('"')) {
+        fieldValue = fieldValue.slice(1, -1).replace(/\\"/g, '"');
+      }
+      result[key] = fieldValue;
+    });
+
+  if (result["filename*"]) {
+    const encoded = result["filename*"].replace(/^utf-8''/i, "");
+    try {
+      result.filename = decodeURIComponent(encoded);
+    } catch (_error) {
+      result.filename = encoded;
+    }
+  }
+
+  return result;
+}
+
+function parseMultipartBuffer(buffer, boundary) {
+  if (!boundary) throw new Error("Upload boundary is missing.");
+
+  const boundaryBuffer = Buffer.from(`--${boundary}`);
+  const nextBoundaryBuffer = Buffer.from(`\r\n--${boundary}`);
+  const headerSeparator = Buffer.from("\r\n\r\n");
+  const fields = {};
+  let position = buffer.indexOf(boundaryBuffer);
+
+  while (position !== -1) {
+    position += boundaryBuffer.length;
+    if (buffer[position] === 45 && buffer[position + 1] === 45) break;
+    if (buffer[position] === 13 && buffer[position + 1] === 10) position += 2;
+
+    const headerEnd = buffer.indexOf(headerSeparator, position);
+    if (headerEnd === -1) throw new Error("Upload could not be read.");
+
+    const rawHeaders = buffer.subarray(position, headerEnd).toString("utf8");
+    const headers = Object.fromEntries(
+      rawHeaders
+        .split("\r\n")
+        .map((line) => {
+          const index = line.indexOf(":");
+          if (index === -1) return null;
+          return [line.slice(0, index).trim().toLowerCase(), line.slice(index + 1).trim()];
+        })
+        .filter(Boolean)
+    );
+    const disposition = parseMultipartHeaderValue(headers["content-disposition"]);
+    const name = disposition.name;
+    if (!name) throw new Error("Upload field name is missing.");
+
+    const dataStart = headerEnd + headerSeparator.length;
+    const nextBoundary = buffer.indexOf(nextBoundaryBuffer, dataStart);
+    if (nextBoundary === -1) throw new Error("Upload ended unexpectedly.");
+    const data = buffer.subarray(dataStart, nextBoundary);
+
+    if (disposition.filename !== undefined) {
+      fields[name] = {
+        name: disposition.filename,
+        type: headers["content-type"] || "application/octet-stream",
+        buffer: Buffer.from(data)
+      };
+    } else {
+      fields[name] = data.toString("utf8");
+    }
+
+    position = nextBoundary + 2;
+  }
+
+  return fields;
+}
+
+async function readMultipart(req) {
+  const contentType = req.headers["content-type"] || "";
+  const boundary = multipartBoundary(contentType);
+  const buffer = await readBody(req, MAX_MULTIPART_BYTES);
+  return parseMultipartBuffer(buffer, boundary);
+}
+
+async function readRequestBody(req) {
+  if (req.method === "GET") return {};
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (contentType.startsWith("multipart/form-data")) {
+    return readMultipart(req);
+  }
+  return readJson(req);
 }
 
 function supabaseConfig() {
@@ -860,6 +971,17 @@ function safeReceiptName(name) {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120) || "receipt";
 }
 
+function encodedStoragePath(storedName) {
+  return String(storedName || "")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+function storageObjectEndpoint(bucket, storedName, action = "object") {
+  return `/storage/v1/${action}/${encodeURIComponent(bucket)}/${encodedStoragePath(storedName)}`;
+}
+
 function safeLocalReceiptPath(storedName) {
   const root = path.resolve(UPLOAD_DIR);
   const filePath = path.resolve(root, String(storedName || ""));
@@ -919,12 +1041,14 @@ function parseReceipt(receipt) {
   }
 
   const originalName = safeReceiptName(receipt.name);
-  const match = String(receipt.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
-    throw new Error("Receipt upload was not in the expected format.");
+  let buffer = Buffer.isBuffer(receipt.buffer) ? receipt.buffer : null;
+  if (!buffer) {
+    const match = String(receipt.dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) {
+      throw new Error("Receipt upload was not in the expected format.");
+    }
+    buffer = Buffer.from(match[2], "base64");
   }
-
-  const buffer = Buffer.from(match[2], "base64");
   if (!buffer.length) {
     throw new Error("Receipt upload is empty.");
   }
@@ -940,6 +1064,111 @@ function parseReceipt(receipt) {
   };
 }
 
+function receiptUploadMetadata(body) {
+  const originalName = safeReceiptName(body.name);
+  const size = Number(body.size || 0);
+  const declaredMimeType = String(body.type || "").toLowerCase();
+  const extension = receiptExtension(originalName);
+  const extensionMimeType = RECEIPT_EXTENSION_MIME_TYPES.get(extension);
+
+  if (!originalName) throw new Error("Receipt file name is required.");
+  if (!Number.isFinite(size) || size <= 0) throw new Error("Receipt upload is empty.");
+  if (size > MAX_RECEIPT_BYTES) throw new Error("Receipt upload must be 5 MB or smaller.");
+  if (!RECEIPT_MIME_TYPES.has(declaredMimeType) && !extensionMimeType) {
+    throw new Error(RECEIPT_TYPE_ERROR);
+  }
+
+  const mimeType = RECEIPT_MIME_TYPES.has(declaredMimeType) ? declaredMimeType : extensionMimeType;
+  return { originalName, size, mimeType, extension };
+}
+
+function resolveSupabaseSignedUrl(value, token, uploadEndpoint) {
+  const config = supabaseConfig();
+  if (!config) throw new Error("Supabase is not configured.");
+
+  if (value) {
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith("/storage/v1/")) return `${config.url}${value}`;
+    if (value.startsWith("/")) return `${config.url}/storage/v1${value}`;
+    return `${config.url}/storage/v1/${value.replace(/^\/+/, "")}`;
+  }
+
+  if (token) {
+    return `${config.url}${uploadEndpoint}?token=${encodeURIComponent(token)}`;
+  }
+
+  throw new Error("Supabase did not return a signed receipt upload URL.");
+}
+
+async function createReceiptUploadUrl(user, body) {
+  if (!isSupabaseEnabled()) {
+    return { direct: false };
+  }
+
+  const metadata = receiptUploadMetadata(body);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(metadata.extension) === metadata.mimeType
+    ? metadata.extension
+    : RECEIPT_MIME_EXTENSIONS.get(metadata.mimeType) || metadata.extension || ".receipt";
+  const storedName = `pending/${user.id}/${id("receipt")}${extension}`;
+  const uploadEndpoint = storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName, "object/upload/sign");
+  const response = await supabaseRequest(uploadEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: 600 })
+  });
+  const payload = await response.json();
+  const uploadData = payload.data || payload;
+  const signedUrl = resolveSupabaseSignedUrl(
+    uploadData.signedURL || uploadData.signedUrl || uploadData.url,
+    uploadData.token,
+    uploadEndpoint
+  );
+
+  return {
+    direct: true,
+    storage: "supabase",
+    bucket: SUPABASE_RECEIPT_BUCKET,
+    originalName: metadata.originalName,
+    mimeType: metadata.mimeType,
+    size: metadata.size,
+    storedName,
+    signedUrl,
+    method: "PUT"
+  };
+}
+
+async function receiptFromSupabaseUpload(user, upload) {
+  if (!upload || typeof upload !== "object") {
+    throw new Error("Receipt upload details are required.");
+  }
+
+  const storedName = String(upload.storedName || "");
+  const expectedPrefix = `pending/${user.id}/`;
+  if (!storedName.startsWith(expectedPrefix)) {
+    throw new Error("Receipt upload path is invalid.");
+  }
+
+  const bucket = String(upload.bucket || SUPABASE_RECEIPT_BUCKET);
+  if (bucket !== SUPABASE_RECEIPT_BUCKET) {
+    throw new Error("Receipt upload bucket is invalid.");
+  }
+
+  const originalName = safeReceiptName(upload.originalName);
+  const response = await supabaseRequest(storageObjectEndpoint(bucket, storedName));
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const parsed = parseReceipt({ name: originalName, buffer });
+
+  return {
+    storage: "supabase",
+    bucket,
+    originalName: parsed.originalName,
+    mimeType: parsed.mimeType,
+    size: parsed.buffer.length,
+    storedName,
+    uploadedAt: nowIso()
+  };
+}
+
 async function saveReceiptAttachment(claimId, receipt) {
   const parsed = parseReceipt(receipt);
   const originalExtension = receiptExtension(parsed.originalName);
@@ -952,10 +1181,7 @@ async function saveReceiptAttachment(claimId, receipt) {
 
   if (isSupabaseEnabled()) {
     await supabaseRequest(
-      `/storage/v1/object/${encodeURIComponent(SUPABASE_RECEIPT_BUCKET)}/${storedName
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`,
+      storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName),
       {
         method: "POST",
         headers: {
@@ -999,12 +1225,7 @@ async function readReceiptAttachment(claim) {
 
   if (claim.receipt?.storage === "supabase") {
     const storedName = String(claim.receipt.storedName || "");
-    const response = await supabaseRequest(
-      `/storage/v1/object/${encodeURIComponent(claim.receipt.bucket || SUPABASE_RECEIPT_BUCKET)}/${storedName
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`
-    );
+    const response = await supabaseRequest(storageObjectEndpoint(claim.receipt.bucket || SUPABASE_RECEIPT_BUCKET, storedName));
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);
   }
@@ -1145,8 +1366,117 @@ function visibleMedicalClaims(db, user) {
   );
 }
 
+function visibleEmails(db, user) {
+  if (canAdmin(user)) return db.emails;
+  return db.emails.filter((email) => email.recipientId === user.id);
+}
+
 function visibleUsers(db, user) {
   return db.users.filter((employee) => canSeeEmployee(user, employee)).map(publicUser);
+}
+
+function historyYear(kind, item) {
+  if (kind === "leave") {
+    return String(item.leaveYear || item.startDate?.slice(0, 4) || currentLeaveYear());
+  }
+  return String(item.claimDate?.slice(0, 4) || currentLeaveYear());
+}
+
+function historyYears(kind, items) {
+  const years = new Set([String(currentLeaveYear())]);
+  items.forEach((item) => years.add(historyYear(kind, item)));
+  return [...years].filter(Boolean).sort((a, b) => Number(b) - Number(a));
+}
+
+function claimHistoryCategory(item) {
+  return item.claimType === "general" ? "Others" : "Medical";
+}
+
+function userSearchText(db, userId) {
+  const user = getUser(db, userId);
+  if (!user) return "unassigned";
+  return `${user.name} ${user.email} ${user.role}`;
+}
+
+function historySearchText(db, kind, item) {
+  const shared = [
+    userSearchText(db, item.employeeId),
+    userSearchText(db, item.managerId),
+    item.status,
+    decisionLabel(item.status)
+  ];
+
+  if (kind === "leave") {
+    shared.push(item.type, item.reason, item.startDate, item.endDate, item.days);
+  } else {
+    shared.push(
+      claimHistoryCategory(item),
+      item.category,
+      item.provider,
+      item.description,
+      item.claimDate,
+      item.amount,
+      item.receipt?.originalName
+    );
+  }
+
+  return shared.join(" ").toLowerCase();
+}
+
+function newestHistoryTime(kind, item) {
+  const fallback = kind === "leave" ? item.startDate : item.claimDate;
+  return new Date(item.decidedAt || item.createdAt || fallback || 0).getTime() || 0;
+}
+
+function pageParams(searchParams, defaultLimit) {
+  const offset = Math.max(0, Number.parseInt(searchParams.get("offset") || "0", 10) || 0);
+  const rawLimit = Number.parseInt(searchParams.get("limit") || String(defaultLimit), 10) || defaultLimit;
+  const limit = Math.max(1, Math.min(rawLimit, HISTORY_MAX_LIMIT));
+  return { offset, limit };
+}
+
+function historyPage(db, user, kind, searchParams) {
+  const status = searchParams.get("status") || "all";
+  const year = searchParams.get("year") || "all";
+  const category = searchParams.get("category") || "all";
+  const query = String(searchParams.get("query") || "").trim().toLowerCase();
+  const { offset, limit } = pageParams(searchParams, HISTORY_DEFAULT_LIMIT);
+  const visibleItems = kind === "leave" ? visibleLeaveRequests(db, user) : visibleMedicalClaims(db, user);
+  const decidedItems = visibleItems.filter((item) => item.status !== "pending");
+
+  const filtered = decidedItems
+    .filter((item) => {
+      if (status !== "all" && item.status !== status) return false;
+      if (year !== "all" && historyYear(kind, item) !== year) return false;
+      if (kind === "claim" && category !== "all" && claimHistoryCategory(item) !== category) return false;
+      if (query && !historySearchText(db, kind, item).includes(query)) return false;
+      return true;
+    })
+    .sort((a, b) => newestHistoryTime(kind, b) - newestHistoryTime(kind, a));
+
+  return {
+    items: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+    offset,
+    limit,
+    hasMore: offset + limit < filtered.length,
+    years: historyYears(kind, decidedItems)
+  };
+}
+
+function emailPage(db, user, searchParams) {
+  const { offset, limit } = pageParams(searchParams, MAIL_DEFAULT_LIMIT);
+  const emails = visibleEmails(db, user)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  return {
+    items: emails.slice(offset, offset + limit),
+    total: emails.length,
+    offset,
+    limit,
+    hasMore: offset + limit < emails.length
+  };
 }
 
 function dashboard(db, user) {
@@ -1154,9 +1484,12 @@ function dashboard(db, user) {
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
   const leaveRequests = visibleLeaveRequests(db, user);
   const medicalClaims = visibleMedicalClaims(db, user);
-  const emails = canAdmin(user)
-    ? db.emails
-    : db.emails.filter((email) => email.recipientId === user.id);
+  const pendingLeaveRequests = leaveRequests.filter((request) => request.status === "pending");
+  const pendingMedicalClaims = medicalClaims.filter((claim) => claim.status === "pending");
+  const recentEmails = visibleEmails(db, user)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, 4);
 
   return {
     user: publicUser(user),
@@ -1167,17 +1500,17 @@ function dashboard(db, user) {
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
-    leaveRequests,
-    medicalClaims,
-    emails,
+    leaveRequests: pendingLeaveRequests,
+    medicalClaims: pendingMedicalClaims,
+    emails: recentEmails,
     teamMembers: db.users
       .filter((employee) => employee.managerId === user.id)
       .map(publicUser),
     counts: {
-      pendingLeave: leaveRequests.filter(
+      pendingLeave: pendingLeaveRequests.filter(
         (request) => request.status === "pending" && canReview(user, request)
       ).length,
-      pendingClaims: medicalClaims.filter(
+      pendingClaims: pendingMedicalClaims.filter(
         (claim) => claim.status === "pending" && canReview(user, claim)
       ).length
     }
@@ -1308,6 +1641,27 @@ function updateEmployee(db, employeeId, body) {
   employee.updatedAt = nowIso();
 
   return employee;
+}
+
+function updateEmployees(db, body) {
+  const updates = Array.isArray(body.employees) ? body.employees : null;
+  if (!updates) throw new Error("Employee updates are required.");
+  if (!updates.length) throw new Error("At least one employee update is required.");
+
+  const seen = new Set();
+  return updates.map((update) => {
+    if (!update || typeof update !== "object") {
+      throw new Error("Each employee update must include employee details.");
+    }
+
+    const employeeId = String(update.id || "").trim();
+    if (!employeeId) throw new Error("Employee ID is required for each update.");
+    if (seen.has(employeeId)) throw new Error("Each employee can only appear once in Save All.");
+    seen.add(employeeId);
+
+    const { id: _id, ...fields } = update;
+    return updateEmployee(db, employeeId, fields);
+  });
 }
 
 async function createLeaveRequest(db, user, body) {
@@ -1486,7 +1840,9 @@ async function createClaim(db, user, body) {
     decidedBy: null
   };
 
-  claim.receipt = await saveReceiptAttachment(claim.id, body.receipt);
+  claim.receipt = body.receiptUpload
+    ? await receiptFromSupabaseUpload(user, body.receiptUpload)
+    : await saveReceiptAttachment(claim.id, body.receipt);
 
   db.medicalClaims.unshift(claim);
   const label = claimType === "medical" ? "Medical claim" : "General claim";
@@ -1537,7 +1893,9 @@ async function decideClaim(db, reviewer, claimId, body) {
 
 async function handleApi(req, res, pathname) {
   const db = await loadDb();
-  const body = req.method === "GET" ? {} : await readJson(req);
+  const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  const searchParams = requestUrl.searchParams;
+  const body = await readRequestBody(req);
 
   if (req.method === "POST" && pathname === "/api/login") {
     const email = String(body.email || "").trim();
@@ -1688,11 +2046,39 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: dashboard(db, user) });
   }
 
+  if (req.method === "GET" && pathname === "/api/history/leave") {
+    return jsonResponse(res, 200, { data: historyPage(db, user, "leave", searchParams) });
+  }
+
+  if (req.method === "GET" && pathname === "/api/history/claims") {
+    return jsonResponse(res, 200, { data: historyPage(db, user, "claim", searchParams) });
+  }
+
+  if (req.method === "GET" && pathname === "/api/history/emails") {
+    return jsonResponse(res, 200, { data: emailPage(db, user, searchParams) });
+  }
+
+  if (req.method === "POST" && pathname === "/api/claim-receipts/upload-url") {
+    return jsonResponse(res, 200, { data: await createReceiptUploadUrl(user, body) });
+  }
+
   if (req.method === "POST" && pathname === "/api/employees") {
     requireAdmin(user);
     const employee = await createEmployee(db, body);
     await saveDb(db);
     return jsonResponse(res, 201, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
+  }
+
+  if (req.method === "PATCH" && pathname === "/api/employees/bulk") {
+    requireAdmin(user);
+    const employees = updateEmployees(db, body);
+    await saveDb(db);
+    return jsonResponse(res, 200, {
+      data: {
+        employees: employees.map(publicUser),
+        dashboard: dashboard(db, user)
+      }
+    });
   }
 
   const employeeMatch = pathname.match(/^\/api\/employees\/([^/]+)$/);
@@ -1810,4 +2196,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { handleRequest };
+module.exports = {
+  handleRequest,
+  __test: {
+    multipartBoundary,
+    parseMultipartBuffer,
+    parseReceipt,
+    receiptUploadMetadata,
+    resolveSupabaseSignedUrl,
+    storageObjectEndpoint
+  }
+};
