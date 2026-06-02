@@ -35,6 +35,9 @@ const state = {
     loading: false,
     loaded: false,
     requestId: 0
+  },
+  passwordReset: {
+    employeeId: null
   }
 };
 
@@ -171,6 +174,7 @@ function updateDashboard(data) {
   } else {
     state.dashboard = data;
   }
+  state.passwordReset = { employeeId: null };
   resetHistoryResults();
   resetMailResults();
   render();
@@ -570,6 +574,7 @@ function renderShell(content) {
         ${content}
       </main>
     </div>
+    ${renderPasswordResetDialog()}
   `;
 }
 
@@ -580,6 +585,39 @@ function renderTopbar(title, kicker) {
         <h1 class="page-title">${title}</h1>
         <p class="page-kicker">${kicker}</p>
       </div>
+    </div>
+  `;
+}
+
+function renderPasswordResetDialog() {
+  const employeeId = state.passwordReset.employeeId;
+  if (!employeeId) return "";
+
+  const employee = state.dashboard.userById[employeeId];
+  if (!employee) return "";
+
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="password-reset-title">
+        <div class="modal-header">
+          <h2 id="password-reset-title">Reset Login Password</h2>
+          <button class="icon-button" data-action="close-password-reset" aria-label="Close password reset">x</button>
+        </div>
+        <div class="modal-body">
+          <div>
+            <div class="metric-label">Employee</div>
+            <div class="detail-value">${escapeHtml(employee.name)}</div>
+          </div>
+          <label class="field" for="temporary-password">
+            <span>New Temporary Password</span>
+            <input id="temporary-password" data-password-reset-input autocomplete="new-password" type="password" minlength="8" required>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="button" data-action="close-password-reset">Cancel</button>
+          <button class="button primary" data-action="confirm-password-reset" data-id="${escapeHtml(employee.id)}">Reset Password</button>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -1120,14 +1158,10 @@ function renderEmployees() {
                   <option value="false" ${!employee.active ? "selected" : ""}>No</option>
                 </select>
               </div>
-              <div class="field">
-                <label>New Temporary Password</label>
-                <input data-password-reset autocomplete="new-password" placeholder="Leave blank unless resetting">
-              </div>
               <div class="field row-actions">
                 <label>Actions</label>
-                <button class="button small" data-action="save-employee" data-id="${employee.id}">Save</button>
-                <button class="button small" data-action="reset-employee-password" data-id="${employee.id}">Reset Password</button>
+                <button class="button small" data-action="save-employee" data-id="${employee.id}">Save Details</button>
+                <button class="button small" data-action="open-password-reset" data-id="${employee.id}">Reset Login Password</button>
               </div>
             </div>
           `).join("")}
@@ -1316,6 +1350,12 @@ document.addEventListener("submit", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  if (event.target.classList?.contains("modal-backdrop")) {
+    state.passwordReset = { employeeId: null };
+    render();
+    return;
+  }
+
   const button = event.target.closest("[data-action]");
   if (!button) return;
   const action = button.dataset.action;
@@ -1359,9 +1399,18 @@ document.addEventListener("click", async (event) => {
       showToast("Employee updated.");
     }
 
-    if (action === "reset-employee-password") {
-      const row = button.closest("[data-employee-id]");
-      const input = row?.querySelector("[data-password-reset]");
+    if (action === "open-password-reset") {
+      state.passwordReset = { employeeId: button.dataset.id };
+      render();
+    }
+
+    if (action === "close-password-reset") {
+      state.passwordReset = { employeeId: null };
+      render();
+    }
+
+    if (action === "confirm-password-reset") {
+      const input = document.querySelector("[data-password-reset-input]");
       const password = String(input?.value || "").trim();
       if (!password) {
         showToast("Enter a new temporary password first.", "error");
