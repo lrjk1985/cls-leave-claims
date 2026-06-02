@@ -58,3 +58,28 @@ test("resolveSupabaseSignedUrl builds a browser upload URL from a token", () => 
     else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
   }
 });
+
+test("resetEmployeePassword sets a new temporary password", () => {
+  const db = {
+    users: [
+      {
+        id: "usr_1",
+        email: "employee@cls.local",
+        name: "Employee",
+        active: true
+      }
+    ]
+  };
+
+  const { employee, temporaryPassword } = __test.resetEmployeePassword(db, "usr_1", {
+    password: "welcome123"
+  });
+
+  assert.equal(temporaryPassword, "welcome123");
+  assert.equal(employee.updatedAt.includes("T"), true);
+  assert.equal(__test.verifyPassword("welcome123", employee), true);
+  assert.throws(
+    () => __test.resetEmployeePassword(db, "usr_1", { password: "short" }),
+    /Temporary password must be at least 8 characters/
+  );
+});

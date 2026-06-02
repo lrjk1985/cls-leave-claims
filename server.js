@@ -87,6 +87,18 @@ function createPassword(password) {
   return { passwordSalt: salt, passwordHash: hash };
 }
 
+function assertPassword(password, label = "Password") {
+  const value = String(password || "");
+  if (value.length < 8) throw new Error(`${label} must be at least 8 characters.`);
+  return value;
+}
+
+function setUserPassword(user, password, label = "Password") {
+  Object.assign(user, createPassword(assertPassword(password, label)));
+  user.updatedAt = nowIso();
+  return user;
+}
+
 function verifyPassword(password, user) {
   if (!user.passwordSalt || !user.passwordHash) return false;
   const hash = crypto
@@ -102,13 +114,11 @@ function changePassword(user, body) {
 
   if (!currentPassword) throw new Error("Please enter your current password.");
   if (!verifyPassword(currentPassword, user)) throw new Error("Current password is incorrect.");
-  if (newPassword.length < 8) throw new Error("New password must be at least 8 characters.");
+  assertPassword(newPassword, "New password");
   if (newPassword !== confirmPassword) throw new Error("New passwords do not match.");
   if (verifyPassword(newPassword, user)) throw new Error("New password must be different from your current password.");
 
-  Object.assign(user, createPassword(newPassword));
-  user.updatedAt = nowIso();
-  return user;
+  return setUserPassword(user, newPassword, "New password");
 }
 
 function keepOnlyCurrentSession(db, userId, currentToken) {
@@ -1529,7 +1539,7 @@ async function createEmployee(db, body) {
     "Initial annual leave days"
   );
   const medicalClaimLimit = Number(body.medicalClaimLimit ?? 500);
-  const password = String(body.password || "welcome123");
+  const password = assertPassword(body.password || "welcome123", "Temporary password");
 
   if (!name) throw new Error("Employee name is required.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("A valid email is required.");
@@ -1636,11 +1646,24 @@ function updateEmployee(db, employeeId, body) {
     employee.active = Boolean(body.active);
   }
   if (body.password) {
-    Object.assign(employee, createPassword(String(body.password)));
+    setUserPassword(employee, body.password, "Temporary password");
   }
   employee.updatedAt = nowIso();
 
   return employee;
+}
+
+function resetEmployeePassword(db, employeeId, body) {
+  const employee = getUser(db, employeeId);
+  if (!employee) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  const temporaryPassword = assertPassword(body.password, "Temporary password");
+  setUserPassword(employee, temporaryPassword, "Temporary password");
+  return { employee, temporaryPassword };
 }
 
 function updateEmployees(db, body) {
@@ -2081,6 +2104,15 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  const employeePasswordMatch = pathname.match(/^\/api\/employees\/([^/]+)\/password$/);
+  if (employeePasswordMatch && req.method === "POST") {
+    requireAdmin(user);
+    const { employee } = resetEmployeePassword(db, employeePasswordMatch[1], body);
+    keepOnlyCurrentSession(db, employee.id, parseCookies(req).cls_session);
+    await saveDb(db);
+    return jsonResponse(res, 200, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
+  }
+
   const employeeMatch = pathname.match(/^\/api\/employees\/([^/]+)$/);
   if (employeeMatch && req.method === "PATCH") {
     requireAdmin(user);
@@ -2203,7 +2235,9 @@ module.exports = {
     parseMultipartBuffer,
     parseReceipt,
     receiptUploadMetadata,
+    resetEmployeePassword,
     resolveSupabaseSignedUrl,
-    storageObjectEndpoint
+    storageObjectEndpoint,
+    verifyPassword
   }
 };

@@ -1120,9 +1120,14 @@ function renderEmployees() {
                   <option value="false" ${!employee.active ? "selected" : ""}>No</option>
                 </select>
               </div>
+              <div class="field">
+                <label>New Temporary Password</label>
+                <input data-password-reset autocomplete="new-password" placeholder="Leave blank unless resetting">
+              </div>
               <div class="field row-actions">
                 <label>Actions</label>
                 <button class="button small" data-action="save-employee" data-id="${employee.id}">Save</button>
+                <button class="button small" data-action="reset-employee-password" data-id="${employee.id}">Reset Password</button>
               </div>
             </div>
           `).join("")}
@@ -1352,6 +1357,27 @@ document.addEventListener("click", async (event) => {
       });
       updateDashboard(data);
       showToast("Employee updated.");
+    }
+
+    if (action === "reset-employee-password") {
+      const row = button.closest("[data-employee-id]");
+      const input = row?.querySelector("[data-password-reset]");
+      const password = String(input?.value || "").trim();
+      if (!password) {
+        showToast("Enter a new temporary password first.", "error");
+        return;
+      }
+      if (password.length < 8) {
+        showToast("Temporary password must be at least 8 characters.", "error");
+        return;
+      }
+
+      const data = await api(`/api/employees/${button.dataset.id}/password`, {
+        method: "POST",
+        body: JSON.stringify({ password })
+      });
+      updateDashboard(data);
+      showToast("Temporary password reset.");
     }
 
     if (action === "save-all-employees") {
