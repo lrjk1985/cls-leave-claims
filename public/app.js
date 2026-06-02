@@ -36,7 +36,18 @@ const state = {
     loaded: false,
     requestId: 0
   },
+  audit: {
+    query: "",
+    items: [],
+    total: 0,
+    loading: false,
+    loadedKey: "",
+    requestId: 0
+  },
   passwordReset: {
+    employeeId: null
+  },
+  leaveAdjustment: {
     employeeId: null
   }
 };
@@ -44,6 +55,8 @@ const state = {
 const app = document.querySelector("#app");
 const HISTORY_PAGE_SIZE = 10;
 const MAIL_PAGE_SIZE = 20;
+const AUDIT_PAGE_SIZE = 20;
+let auditSearchTimer = null;
 const MAX_RECEIPT_BYTES = 5_000_000;
 const RECEIPT_HELP_TEXT = "PDF, JPG, PNG, WebP, HEIC, or HEIF. Max 5 MB.";
 const RECEIPT_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif";
@@ -119,6 +132,11 @@ function statusLabel(status) {
   return "Pending";
 }
 
+function signedDays(value) {
+  const days = Number(value || 0);
+  return `${days > 0 ? "+" : ""}${days}`;
+}
+
 function showToast(message, type = "ok") {
   const old = document.querySelector(".toast");
   if (old) old.remove();
@@ -168,6 +186,14 @@ function resetMailResults() {
   state.mail.requestId = (state.mail.requestId || 0) + 1;
 }
 
+function resetAuditResults() {
+  state.audit.items = [];
+  state.audit.total = 0;
+  state.audit.loading = false;
+  state.audit.loadedKey = "";
+  state.audit.requestId = (state.audit.requestId || 0) + 1;
+}
+
 function updateDashboard(data) {
   if (data.dashboard) {
     state.dashboard = data.dashboard;
@@ -175,8 +201,10 @@ function updateDashboard(data) {
     state.dashboard = data;
   }
   state.passwordReset = { employeeId: null };
+  state.leaveAdjustment = { employeeId: null };
   resetHistoryResults();
   resetMailResults();
+  resetAuditResults();
   render();
 }
 
@@ -310,6 +338,53 @@ async function loadMail(options = {}) {
 function ensureMailLoaded() {
   if (!state.mail.loading && !state.mail.loaded) {
     loadMail();
+  }
+}
+
+function auditFilterKey() {
+  return state.audit.query.trim().toLowerCase();
+}
+
+async function loadAudit(options = {}) {
+  if (!isAdmin() || state.audit.loading) return;
+
+  const key = auditFilterKey();
+  const append = options.append && state.audit.loadedKey === key;
+  const offset = append ? state.audit.items.length : 0;
+  const requestId = (state.audit.requestId || 0) + 1;
+  state.audit.requestId = requestId;
+  state.audit.loading = true;
+  if (!append) {
+    state.audit.items = [];
+    state.audit.total = 0;
+    state.audit.loadedKey = key;
+  }
+
+  try {
+    const params = new URLSearchParams({
+      query: state.audit.query.trim(),
+      offset: String(offset),
+      limit: String(AUDIT_PAGE_SIZE)
+    });
+    const data = await api(`/api/audit-events?${params.toString()}`);
+    if (state.audit.requestId !== requestId || auditFilterKey() !== key) return;
+    state.audit.items = append ? [...state.audit.items, ...data.items] : data.items;
+    state.audit.total = data.total;
+    state.audit.loadedKey = key;
+  } catch (error) {
+    if (state.audit.requestId === requestId && auditFilterKey() === key) showToast(error.message, "error");
+  } finally {
+    if (state.audit.requestId === requestId && state.audit.loadedKey === key) {
+      state.audit.loading = false;
+      render();
+    }
+  }
+}
+
+function ensureAuditLoaded() {
+  if (!isAdmin() || state.audit.loading) return;
+  if (state.audit.loadedKey !== auditFilterKey()) {
+    loadAudit();
   }
 }
 
@@ -565,6 +640,7 @@ function renderShell(content) {
           ${renderNavButton("claims", "Claims")}
           ${(approvals || user.role !== "employee") ? renderNavButton("approvals", "Approvals", approvals || "") : ""}
           ${isAdmin() ? renderNavButton("employees", "Employees") : ""}
+          ${isAdmin() ? renderNavButton("audit", "Audit Log") : ""}
           ${renderNavButton("account", "Account")}
           ${renderNavButton("mail", "Email Outbox")}
         </nav>
@@ -575,6 +651,7 @@ function renderShell(content) {
       </main>
     </div>
     ${renderPasswordResetDialog()}
+    ${renderLeaveAdjustmentDialog()}
   `;
 }
 
@@ -622,6 +699,52 @@ function renderPasswordResetDialog() {
   `;
 }
 
+function renderLeaveAdjustmentDialog() {
+  const employeeId = state.leaveAdjustment.employeeId;
+  if (!employeeId) return "";
+
+  const employee = state.dashboard.userById[employeeId];
+  if (!employee) return "";
+
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <form class="modal" role="dialog" aria-modal="true" aria-labelledby="leave-adjustment-title" data-form="leave-adjustment">
+        <div class="modal-header">
+          <h2 id="leave-adjustment-title">Adjust Leave</h2>
+          <button class="icon-button" type="button" data-action="close-leave-adjustment" aria-label="Close leave adjustment">x</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" name="employeeId" value="${escapeHtml(employee.id)}">
+          <div>
+            <div class="metric-label">Employee</div>
+            <div class="detail-value">${escapeHtml(employee.name)}</div>
+            <div class="muted">Current total leave entitlement: ${employee.leaveEntitlement}</div>
+          </div>
+          <label class="field" for="leave-adjustment-direction">
+            <span>Adjustment</span>
+            <select id="leave-adjustment-direction" name="direction" required>
+              <option value="add">Add Leave</option>
+              <option value="deduct">Deduct Leave</option>
+            </select>
+          </label>
+          <label class="field" for="leave-adjustment-days">
+            <span>Days</span>
+            <input id="leave-adjustment-days" name="days" type="number" min="0.5" step="0.5" value="0.5" required>
+          </label>
+          <label class="field" for="leave-adjustment-reason">
+            <span>Reason</span>
+            <textarea id="leave-adjustment-reason" name="reason" required></textarea>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="button" type="button" data-action="close-leave-adjustment">Cancel</button>
+          <button class="button primary" type="submit">Apply Adjustment</button>
+        </div>
+      </form>
+    </div>
+  `;
+}
+
 function renderMetrics() {
   const summary = state.dashboard.leaveSummary;
   return `
@@ -637,6 +760,14 @@ function renderMetrics() {
       <div class="metric">
         <div class="metric-label">Carried Forward</div>
         <div class="metric-value">${summary.carriedForward}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Birthday Leave</div>
+        <div class="metric-value">${summary.birthdayLeave}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Adjustments</div>
+        <div class="metric-value">${signedDays(summary.adjustments)}</div>
       </div>
       <div class="metric">
         <div class="metric-label">Leave Pending</div>
@@ -1031,7 +1162,7 @@ function employeeSearchText(employee) {
     roleName(employee.role),
     manager,
     `service ${employee.serviceStartDate}`,
-    `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement}`,
+    `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement} birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
     `medical ${employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
   ].join(" ").toLowerCase();
@@ -1045,6 +1176,40 @@ function employeeRowBody(row) {
       : field.value;
   });
   return body;
+}
+
+function renderLeaveAdjustmentHistory() {
+  const adjustments = state.dashboard.leaveAdjustments || [];
+  if (!adjustments.length) return `<div class="empty">No leave adjustments recorded yet.</div>`;
+
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Employee</th>
+            <th>Adjustment</th>
+            <th>Reason</th>
+            <th>Admin</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${adjustments.map((adjustment) => `
+            <tr>
+              <td data-label="Date">${dateTimeText(adjustment.createdAt)}</td>
+              <td data-label="Employee">${escapeHtml(employeeName(adjustment.employeeId))}</td>
+              <td data-label="Adjustment">
+                <strong class="${Number(adjustment.days) >= 0 ? "adjustment-positive" : "adjustment-negative"}">${signedDays(adjustment.days)} day${Math.abs(Number(adjustment.days || 0)) === 1 ? "" : "s"}</strong>
+              </td>
+              <td data-label="Reason">${escapeHtml(adjustment.reason)}</td>
+              <td data-label="Admin">${escapeHtml(employeeName(adjustment.actorId))}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 function renderEmployees() {
@@ -1144,7 +1309,7 @@ function renderEmployees() {
                 <input data-field="startingLeaveEntitlement" type="number" min="0" step="0.5" value="${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement}">
               </div>
               <div class="field">
-                <label>Total With Carry Forward</label>
+                <label>Current Total Leave</label>
                 <input type="number" value="${employee.leaveEntitlement}" disabled>
               </div>
               <div class="field">
@@ -1160,14 +1325,28 @@ function renderEmployees() {
               </div>
               <div class="field row-actions">
                 <label>Actions</label>
-                <button class="button small" data-action="save-employee" data-id="${employee.id}">Save Details</button>
-                <button class="button small" data-action="open-password-reset" data-id="${employee.id}">Reset Login Password</button>
+                <div class="employee-action-bar">
+                  <button class="button primary small" data-action="save-employee" data-id="${employee.id}">Save</button>
+                  <details class="action-menu">
+                    <summary class="button small">More</summary>
+                    <div class="action-menu-list">
+                      <button class="button small" type="button" data-action="open-leave-adjustment" data-id="${employee.id}">Adjust Leave</button>
+                      <button class="button small" type="button" data-action="open-password-reset" data-id="${employee.id}">Reset Password</button>
+                    </div>
+                  </details>
+                </div>
               </div>
             </div>
           `).join("")}
           </div>
           <div class="empty" data-empty="employee-search" hidden>No employees match that search.</div>
         </div>
+      </section>
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Recent Leave Adjustments</h2>
+        </div>
+        ${renderLeaveAdjustmentHistory()}
       </section>
     </div>
   `);
@@ -1202,6 +1381,97 @@ function renderMail() {
             ${state.mail.loading ? "Loading..." : "Load More"}
           </button>
           <span class="muted">${emails.length} of ${state.mail.total} shown</span>
+        </div>
+      ` : ""}
+    </section>
+  `);
+}
+
+function auditActionLabel(action) {
+  const labels = {
+    "account.password_changed": "Password Changed",
+    "employee.created": "Employee Created",
+    "employee.updated": "Employee Updated",
+    "employee.password_reset": "Password Reset",
+    "leave.submitted": "Leave Submitted",
+    "leave.approved": "Leave Approved",
+    "leave.rejected": "Leave Not Approved",
+    "leave.adjustment_added": "Leave Added",
+    "leave.adjustment_deducted": "Leave Deducted",
+    "maintenance.leave_rollover": "Leave Rollover",
+    "maintenance.service_anniversary_accrual": "Service Accrual",
+    "maintenance.receipt_retention": "Receipt Retention",
+    "claim.submitted": "Claim Submitted",
+    "claim.approved": "Claim Approved",
+    "claim.rejected": "Claim Not Approved"
+  };
+  return labels[action] || action;
+}
+
+function renderAuditTable(events) {
+  if (!events.length) return `<div class="empty">No audit entries found.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Action</th>
+            <th>Actor</th>
+            <th>Affected Employee</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${events.map((event) => `
+            <tr>
+              <td data-label="Date">${dateTimeText(event.createdAt)}</td>
+              <td data-label="Action">
+                <strong>${escapeHtml(auditActionLabel(event.action))}</strong>
+                ${event.relatedType ? `<div class="muted">${escapeHtml(event.relatedType)}</div>` : ""}
+              </td>
+              <td data-label="Actor">
+                <strong>${escapeHtml(event.actorName || "System")}</strong>
+                <div class="muted">${escapeHtml(event.actorEmail || event.actorRole || "")}</div>
+              </td>
+              <td data-label="Affected Employee">${escapeHtml(event.affectedUserName || "-")}</td>
+              <td data-label="Details">
+                ${escapeHtml(event.summary || "")}
+                ${event.relatedId ? `<div class="muted">Record ${escapeHtml(event.relatedId)}</div>` : ""}
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAuditLog() {
+  ensureAuditLoaded();
+  const events = state.audit.items || [];
+  const remaining = Math.max(0, Number(state.audit.total || 0) - events.length);
+  renderShell(`
+    ${renderTopbar("Audit Log", "Admin-only record of key leave, claim, account, and employee changes.")}
+    <section class="section">
+      <div class="section-header history-header">
+        <div class="history-heading">
+          <h2 class="section-title">Activity</h2>
+          <div class="history-tools audit-tools">
+            <label class="filter-field search" for="audit-search">
+              <span>Search</span>
+              <input id="audit-search" data-audit-search type="search" value="${escapeHtml(state.audit.query)}" placeholder="Employee, actor, action, or record ID">
+            </label>
+          </div>
+        </div>
+      </div>
+      ${state.audit.loading && !events.length ? `<div class="empty">Loading audit log...</div>` : renderAuditTable(events)}
+      ${remaining > 0 ? `
+        <div class="history-more">
+          <button class="button small" data-action="audit-load-more">
+            ${state.audit.loading ? "Loading..." : "Load More"}
+          </button>
+          <span class="muted">${events.length} of ${state.audit.total} shown</span>
         </div>
       ` : ""}
     </section>
@@ -1267,6 +1537,7 @@ function render() {
   if (state.activeTab === "claims") return renderClaims();
   if (state.activeTab === "approvals") return renderApprovals();
   if (state.activeTab === "employees" && isAdmin()) return renderEmployees();
+  if (state.activeTab === "audit" && isAdmin()) return renderAuditLog();
   if (state.activeTab === "account") return renderAccount();
   if (state.activeTab === "mail") return renderMail();
   return renderOverview();
@@ -1332,6 +1603,17 @@ document.addEventListener("submit", async (event) => {
       updateDashboard(data);
       showToast("Employee created.");
     }
+    if (formType === "leave-adjustment") {
+      const data = await api("/api/leave-adjustments", {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      form.reset();
+      const daysInput = form.querySelector("input[name='days']");
+      if (daysInput) daysInput.value = "0.5";
+      updateDashboard(data);
+      showToast("Leave adjustment applied.");
+    }
     if (formType === "password") {
       const data = await api("/api/account/password", {
         method: "POST",
@@ -1352,6 +1634,7 @@ document.addEventListener("submit", async (event) => {
 document.addEventListener("click", async (event) => {
   if (event.target.classList?.contains("modal-backdrop")) {
     state.passwordReset = { employeeId: null };
+    state.leaveAdjustment = { employeeId: null };
     render();
     return;
   }
@@ -1409,6 +1692,16 @@ document.addEventListener("click", async (event) => {
       render();
     }
 
+    if (action === "open-leave-adjustment") {
+      state.leaveAdjustment = { employeeId: button.dataset.id };
+      render();
+    }
+
+    if (action === "close-leave-adjustment") {
+      state.leaveAdjustment = { employeeId: null };
+      render();
+    }
+
     if (action === "confirm-password-reset") {
       const input = document.querySelector("[data-password-reset-input]");
       const password = String(input?.value || "").trim();
@@ -1458,6 +1751,10 @@ document.addEventListener("click", async (event) => {
     if (action === "mail-load-more") {
       await loadMail({ append: true });
     }
+
+    if (action === "audit-load-more") {
+      await loadAudit({ append: true });
+    }
   } catch (error) {
     showToast(error.message, "error");
   } finally {
@@ -1479,6 +1776,22 @@ document.addEventListener("input", (event) => {
   });
   const empty = document.querySelector("[data-empty='employee-search']");
   if (empty) empty.hidden = visible > 0;
+});
+
+function updateAuditSearch(field) {
+  state.audit.query = field.value;
+  resetAuditResults();
+  if (auditSearchTimer) clearTimeout(auditSearchTimer);
+  auditSearchTimer = setTimeout(() => {
+    auditSearchTimer = null;
+    loadAudit();
+  }, 500);
+}
+
+document.addEventListener("input", (event) => {
+  const field = event.target.closest("[data-audit-search]");
+  if (!field) return;
+  updateAuditSearch(field);
 });
 
 function updateHistoryFilter(field) {

@@ -7,6 +7,7 @@ const { URL } = require("node:url");
 const {
   assertDecision,
   assertIsoDate,
+  ANNUAL_BIRTHDAY_LEAVE_DAYS,
   canAdmin,
   canReview,
   canSeeEmployee,
@@ -19,6 +20,7 @@ const {
   medicalClaimSummary,
   nextLeaveYearBalance,
   normalizeLeaveDays,
+  normalizeSignedLeaveDays,
   normalizeMoney,
   workingDaysBetween
 } = require("./src/domain");
@@ -64,6 +66,8 @@ const RECEIPT_MIME_EXTENSIONS = new Map([
   ["image/heic", ".heic"],
   ["image/heif", ".heif"]
 ]);
+const AUDIT_LOG_MAX_EVENTS = 1000;
+const AUDIT_DEFAULT_LIMIT = 20;
 const HISTORY_DEFAULT_LIMIT = 10;
 const MAIL_DEFAULT_LIMIT = 20;
 const HISTORY_MAX_LIMIT = 50;
@@ -420,9 +424,41 @@ function normalizeDb(db) {
           excludedDates: Array.isArray(request.excludedDates) ? request.excludedDates : []
         }))
       : [],
+    leaveAdjustments: Array.isArray(db.leaveAdjustments) ? db.leaveAdjustments.map(normalizeLeaveAdjustment) : [],
     medicalClaims: Array.isArray(db.medicalClaims) ? db.medicalClaims.map(normalizeClaim) : [],
     emails: Array.isArray(db.emails) ? db.emails : [],
+    auditEvents: Array.isArray(db.auditEvents) ? db.auditEvents.map(normalizeAuditEvent) : [],
     sessions: Array.isArray(db.sessions) ? db.sessions : []
+  };
+}
+
+function normalizeLeaveAdjustment(adjustment) {
+  return {
+    id: adjustment.id || id("adjust"),
+    employeeId: adjustment.employeeId || null,
+    actorId: adjustment.actorId || null,
+    year: Number(adjustment.year || currentLeaveYear()),
+    days: normalizeSignedLeaveDays(adjustment.days || 0, "Leave adjustment days"),
+    reason: adjustment.reason || "",
+    createdAt: adjustment.createdAt || nowIso()
+  };
+}
+
+function normalizeAuditEvent(event) {
+  return {
+    id: event.id || id("audit"),
+    createdAt: event.createdAt || nowIso(),
+    actorId: event.actorId || null,
+    actorName: event.actorName || "System",
+    actorEmail: event.actorEmail || "",
+    actorRole: event.actorRole || "system",
+    action: event.action || "system.note",
+    summary: event.summary || "",
+    affectedUserId: event.affectedUserId || null,
+    affectedUserName: event.affectedUserName || "",
+    relatedType: event.relatedType || null,
+    relatedId: event.relatedId || null,
+    metadata: event.metadata && typeof event.metadata === "object" ? event.metadata : {}
   };
 }
 
@@ -443,6 +479,7 @@ function normalizeUser(user) {
       "Annual leave entitlement"
     ),
     carriedForwardLeave: normalizeLeaveDays(user.carriedForwardLeave ?? 0, "Carried forward leave"),
+    birthdayLeaveEntitlement: normalizeLeaveDays(user.birthdayLeaveEntitlement ?? 0, "Birthday leave"),
     leavePolicyYear: Number(user.leavePolicyYear || thisYear),
     leaveEntitlement: Number(user.leaveEntitlement || 0),
     medicalClaimLimit: Number(user.medicalClaimLimit ?? 500)
@@ -451,7 +488,10 @@ function normalizeUser(user) {
     normalized.annualLeaveEntitlement = startingLeaveEntitlement;
   }
   if (!user.leaveEntitlement && user.leaveEntitlement !== 0) {
-    normalized.leaveEntitlement = normalized.annualLeaveEntitlement + normalized.carriedForwardLeave;
+    normalized.leaveEntitlement = normalizeLeaveDays(
+      normalized.annualLeaveEntitlement + normalized.carriedForwardLeave + normalized.birthdayLeaveEntitlement,
+      "Leave entitlement"
+    );
   }
   return normalized;
 }
@@ -488,9 +528,11 @@ function applyLeaveYearRollover(db, asOfDate = new Date()) {
 
     while (user.leavePolicyYear < targetYear) {
       const balance = nextLeaveYearBalance(user, db.leaveRequests, user.leavePolicyYear + 1);
+      const adjustmentDays = leaveAdjustmentTotal(db, user.id, balance.year);
       user.annualLeaveEntitlement = balance.baseEntitlement;
       user.carriedForwardLeave = balance.carriedForward;
-      user.leaveEntitlement = balance.entitlement;
+      user.birthdayLeaveEntitlement = balance.birthdayLeave;
+      user.leaveEntitlement = normalizeLeaveDays(balance.entitlement + adjustmentDays, "Leave entitlement");
       user.leavePolicyYear = balance.year;
       user.leaveRolloverAt = nowIso();
       processed.push({
@@ -498,8 +540,10 @@ function applyLeaveYearRollover(db, asOfDate = new Date()) {
         year: balance.year,
         previousYear: balance.previousYear,
         carriedForward: balance.carriedForward,
+        birthdayLeave: balance.birthdayLeave,
         annualLeaveEntitlement: balance.baseEntitlement,
-        leaveEntitlement: balance.entitlement
+        adjustmentDays,
+        leaveEntitlement: user.leaveEntitlement
       });
     }
   }
@@ -565,8 +609,10 @@ function applyServiceAnniversaryAccrual(db, asOfDate = new Date()) {
       continue;
     }
     user.annualLeaveEntitlement = annualLeaveEntitlement;
+    const adjustmentDays = leaveAdjustmentTotal(db, user.id, Number(accrualDate.slice(0, 4)));
+    const birthdayLeave = normalizeLeaveDays(user.birthdayLeaveEntitlement ?? 0, "Birthday leave");
     user.leaveEntitlement = normalizeLeaveDays(
-      annualLeaveEntitlement + Number(user.carriedForwardLeave || 0),
+      annualLeaveEntitlement + Number(user.carriedForwardLeave || 0) + birthdayLeave + adjustmentDays,
       "Leave entitlement"
     );
     user.leaveServiceAccrualAt = accrual.latestAnniversary || nowIso();
@@ -575,6 +621,8 @@ function applyServiceAnniversaryAccrual(db, asOfDate = new Date()) {
       asOfDate: accrualDate,
       anniversariesApplied: accrual.count,
       annualLeaveEntitlement,
+      birthdayLeave,
+      adjustmentDays,
       leaveEntitlement: user.leaveEntitlement
     });
   }
@@ -599,6 +647,7 @@ function seedProductionDb() {
     startingLeaveEntitlement: 0,
     annualLeaveEntitlement: 0,
     carriedForwardLeave: 0,
+    birthdayLeaveEntitlement: 0,
     leavePolicyYear: currentLeaveYear(),
     serviceStartDate: formatIsoDate(new Date()),
     medicalClaimLimit: 0,
@@ -611,8 +660,10 @@ function seedProductionDb() {
   return {
     users: [admin],
     leaveRequests: [],
+    leaveAdjustments: [],
     medicalClaims: [],
     sessions: [],
+    auditEvents: [],
     emails: [
       makeEmail([admin], {
         recipientId: admin.id,
@@ -654,6 +705,7 @@ function seedDb() {
       startingLeaveEntitlement: 0,
       annualLeaveEntitlement: 0,
       carriedForwardLeave: 0,
+      birthdayLeaveEntitlement: 0,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2026-01-01",
       medicalClaimLimit: 0,
@@ -672,6 +724,7 @@ function seedDb() {
       startingLeaveEntitlement: 18,
       annualLeaveEntitlement: 18,
       carriedForwardLeave: 0,
+      birthdayLeaveEntitlement: 0,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2020-01-01",
       medicalClaimLimit: 500,
@@ -690,6 +743,7 @@ function seedDb() {
       startingLeaveEntitlement: 16,
       annualLeaveEntitlement: 16,
       carriedForwardLeave: 0,
+      birthdayLeaveEntitlement: 0,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2024-01-01",
       medicalClaimLimit: 500,
@@ -708,6 +762,7 @@ function seedDb() {
       startingLeaveEntitlement: 15,
       annualLeaveEntitlement: 15,
       carriedForwardLeave: 0,
+      birthdayLeaveEntitlement: 0,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2025-01-01",
       medicalClaimLimit: 500,
@@ -760,8 +815,10 @@ function seedDb() {
   return {
     users,
     leaveRequests: [leaveRequest],
+    leaveAdjustments: [],
     medicalClaims: [medicalClaim],
     sessions: [],
+    auditEvents: [],
     emails: [
       makeEmail(users, {
         recipientId: managerId,
@@ -827,6 +884,61 @@ function requireAdmin(user) {
     error.status = 403;
     throw error;
   }
+}
+
+function auditActor(actor) {
+  if (!actor) {
+    return {
+      actorId: null,
+      actorName: "System",
+      actorEmail: "",
+      actorRole: "system"
+    };
+  }
+
+  return {
+    actorId: actor.id || null,
+    actorName: actor.name || "Unknown user",
+    actorEmail: actor.email || "",
+    actorRole: actor.role || "employee"
+  };
+}
+
+function redactAuditMetadata(value) {
+  if (Array.isArray(value)) return value.map(redactAuditMetadata);
+  if (!value || typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      /password|passcode|hash|salt|secret|token/i.test(key)
+        ? "[redacted]"
+        : redactAuditMetadata(item)
+    ])
+  );
+}
+
+function addAuditEvent(db, actor, payload) {
+  if (!Array.isArray(db.auditEvents)) db.auditEvents = [];
+  const affectedUser = payload.affectedUserId ? getUser(db, payload.affectedUserId) : null;
+  const event = normalizeAuditEvent({
+    id: id("audit"),
+    createdAt: nowIso(),
+    ...auditActor(actor),
+    action: payload.action,
+    summary: payload.summary,
+    affectedUserId: payload.affectedUserId || null,
+    affectedUserName: affectedUser?.name || payload.affectedUserName || "",
+    relatedType: payload.relatedType || null,
+    relatedId: payload.relatedId || null,
+    metadata: redactAuditMetadata(payload.metadata || {})
+  });
+
+  db.auditEvents.unshift(event);
+  if (db.auditEvents.length > AUDIT_LOG_MAX_EVENTS) {
+    db.auditEvents.length = AUDIT_LOG_MAX_EVENTS;
+  }
+  return event;
 }
 
 function makeEmail(users, payload) {
@@ -1408,6 +1520,125 @@ function userSearchText(db, userId) {
   return `${user.name} ${user.email} ${user.role}`;
 }
 
+function auditValue(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function auditUserName(db, userId) {
+  if (!userId) return "Unassigned";
+  return getUser(db, userId)?.name || "Unknown";
+}
+
+function employeeChangeSet(db, before, after) {
+  if (!before || !after) return { labels: [], changes: [] };
+
+  const fields = [
+    { key: "name", label: "name" },
+    { key: "email", label: "email" },
+    { key: "role", label: "role" },
+    { key: "serviceStartDate", label: "service start" },
+    { key: "annualLeaveEntitlement", label: "annual leave days" },
+    { key: "leaveEntitlement", label: "total leave entitlement" },
+    { key: "birthdayLeaveEntitlement", label: "birthday leave" },
+    { key: "medicalClaimLimit", label: "medical claim limit" },
+    { key: "active", label: "active status" }
+  ];
+  const changes = fields
+    .filter((field) => auditValue(before[field.key]) !== auditValue(after[field.key]))
+    .map((field) => ({
+      field: field.key,
+      label: field.label,
+      from: before[field.key],
+      to: after[field.key]
+    }));
+
+  if (auditValue(before.managerId) !== auditValue(after.managerId)) {
+    changes.push({
+      field: "managerId",
+      label: "direct report",
+      from: auditUserName(db, before.managerId),
+      to: auditUserName(db, after.managerId)
+    });
+  }
+
+  return {
+    labels: changes.map((change) => change.label),
+    changes
+  };
+}
+
+function addEmployeeUpdateAudit(db, actor, before, employee) {
+  const after = publicUser(employee);
+  const changeSet = employeeChangeSet(db, before, after);
+  if (!changeSet.changes.length) return null;
+  return addAuditEvent(db, actor, {
+    action: "employee.updated",
+    affectedUserId: employee.id,
+    relatedType: "employee",
+    relatedId: employee.id,
+    summary: `Updated ${employee.name}: ${changeSet.labels.join(", ")}`,
+    metadata: { changes: changeSet.changes }
+  });
+}
+
+function addMaintenanceAuditEvents(db, actor, result) {
+  let added = 0;
+
+  if (result.rollover?.changed) {
+    const count = result.rollover.processed?.length || 0;
+    addAuditEvent(db, actor, {
+      action: "maintenance.leave_rollover",
+      relatedType: "maintenance",
+      summary: `Leave rollover updated ${count} employee record${count === 1 ? "" : "s"}.`,
+      metadata: {
+        year: result.rollover.year,
+        processedCount: count,
+        processed: result.rollover.processed || []
+      }
+    });
+    added += 1;
+  }
+
+  if (result.anniversaryAccrual?.changed) {
+    const count = result.anniversaryAccrual.processed?.length || 0;
+    addAuditEvent(db, actor, {
+      action: "maintenance.service_anniversary_accrual",
+      relatedType: "maintenance",
+      summary: `Service anniversary leave accrual updated ${count} employee record${count === 1 ? "" : "s"}.`,
+      metadata: {
+        asOfDate: result.anniversaryAccrual.asOfDate,
+        processedCount: count,
+        processed: result.anniversaryAccrual.processed || []
+      }
+    });
+    added += 1;
+  }
+
+  if (result.receiptRetention?.changed) {
+    addAuditEvent(db, actor, {
+      action: "maintenance.receipt_retention",
+      relatedType: "maintenance",
+      summary: `Receipt retention removed ${result.receiptRetention.deleted} old receipt${result.receiptRetention.deleted === 1 ? "" : "s"}.`,
+      metadata: {
+        cutoff: result.receiptRetention.cutoff,
+        retentionYears: result.receiptRetention.retentionYears,
+        deleted: result.receiptRetention.deleted,
+        failed: result.receiptRetention.failed,
+        errors: result.receiptRetention.errors || []
+      }
+    });
+    added += 1;
+  }
+
+  return added;
+}
+
+function leaveAdjustmentTotal(db, employeeId, year) {
+  return (Array.isArray(db.leaveAdjustments) ? db.leaveAdjustments : [])
+    .filter((adjustment) => adjustment.employeeId === employeeId && Number(adjustment.year) === Number(year))
+    .reduce((total, adjustment) => total + Number(adjustment.days || 0), 0);
+}
+
 function historySearchText(db, kind, item) {
   const shared = [
     userSearchText(db, item.employeeId),
@@ -1489,11 +1720,44 @@ function emailPage(db, user, searchParams) {
   };
 }
 
+function auditSearchText(event) {
+  return [
+    event.createdAt,
+    event.action,
+    event.summary,
+    event.actorName,
+    event.actorEmail,
+    event.actorRole,
+    event.affectedUserName,
+    event.relatedType,
+    event.relatedId
+  ].join(" ").toLowerCase();
+}
+
+function auditPage(db, user, searchParams) {
+  requireAdmin(user);
+  const query = String(searchParams.get("query") || "").trim().toLowerCase();
+  const { offset, limit } = pageParams(searchParams, AUDIT_DEFAULT_LIMIT);
+  const events = (Array.isArray(db.auditEvents) ? db.auditEvents : [])
+    .filter((event) => !query || auditSearchText(event).includes(query))
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+  return {
+    items: events.slice(offset, offset + limit),
+    total: events.length,
+    offset,
+    limit,
+    hasMore: offset + limit < events.length
+  };
+}
+
 function dashboard(db, user) {
   const employees = db.users.map(publicUser);
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
   const leaveRequests = visibleLeaveRequests(db, user);
   const medicalClaims = visibleMedicalClaims(db, user);
+  const leaveYear = Number(user.leavePolicyYear || currentLeaveYear());
+  const currentLeaveAdjustments = leaveAdjustmentTotal(db, user.id, leaveYear);
   const pendingLeaveRequests = leaveRequests.filter((request) => request.status === "pending");
   const pendingMedicalClaims = medicalClaims.filter((claim) => claim.status === "pending");
   const recentEmails = visibleEmails(db, user)
@@ -1506,10 +1770,14 @@ function dashboard(db, user) {
     users: visibleUsers(db, user),
     allEmployees: canAdmin(user) ? employees : visibleUsers(db, user),
     userById,
-    leaveSummary: leaveSummary(user, db.leaveRequests),
+    leaveSummary: leaveSummary(user, db.leaveRequests, {
+      adjustments: currentLeaveAdjustments,
+      birthdayLeave: user.birthdayLeaveEntitlement
+    }),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
+    leaveAdjustments: canAdmin(user) ? (db.leaveAdjustments || []).slice(0, 10) : [],
     leaveRequests: pendingLeaveRequests,
     medicalClaims: pendingMedicalClaims,
     emails: recentEmails,
@@ -1557,6 +1825,7 @@ async function createEmployee(db, body) {
   const createdAt = nowIso();
   const leavePolicyYear = currentLeaveYear();
   const annualLeaveEntitlement = initialAnnualLeaveDays;
+  const birthdayLeaveEntitlement = 0;
   const employee = {
     id: id("usr"),
     name,
@@ -1567,8 +1836,9 @@ async function createEmployee(db, body) {
     startingLeaveEntitlement: initialAnnualLeaveDays,
     annualLeaveEntitlement,
     carriedForwardLeave: 0,
+    birthdayLeaveEntitlement,
     leavePolicyYear,
-    leaveEntitlement: annualLeaveEntitlement,
+    leaveEntitlement: normalizeLeaveDays(annualLeaveEntitlement + birthdayLeaveEntitlement, "Leave entitlement"),
     leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
     active: true,
@@ -1626,10 +1896,13 @@ function updateEmployee(db, employeeId, body) {
       body.startingLeaveEntitlement,
       "Initial annual leave days"
     );
+    const leaveYear = Number(employee.leavePolicyYear || currentLeaveYear());
+    const adjustmentDays = leaveAdjustmentTotal(db, employee.id, leaveYear);
+    const birthdayLeave = normalizeLeaveDays(employee.birthdayLeaveEntitlement ?? 0, "Birthday leave");
     employee.startingLeaveEntitlement = initialAnnualLeaveDays;
     employee.annualLeaveEntitlement = initialAnnualLeaveDays;
     employee.leaveEntitlement = normalizeLeaveDays(
-      initialAnnualLeaveDays + Number(employee.carriedForwardLeave || 0),
+      initialAnnualLeaveDays + Number(employee.carriedForwardLeave || 0) + birthdayLeave + adjustmentDays,
       "Leave entitlement"
     );
     employee.leaveServiceAccrualAt = nowIso();
@@ -1685,6 +1958,73 @@ function updateEmployees(db, body) {
     const { id: _id, ...fields } = update;
     return updateEmployee(db, employeeId, fields);
   });
+}
+
+function normalizeLeaveAdjustmentAmount(value) {
+  const days = normalizeLeaveDays(value, "Adjustment days");
+  if (days <= 0) throw new Error("Adjustment days must be greater than 0.");
+  if (!Number.isInteger(days * 2)) {
+    throw new Error("Adjustment days must be in half-day increments.");
+  }
+  return days;
+}
+
+function createLeaveAdjustment(db, actor, body) {
+  const employeeId = String(body.employeeId || "").trim();
+  const employee = getUser(db, employeeId);
+  if (!employee) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  const direction = body.direction === "deduct" ? "deduct" : "add";
+  const amount = normalizeLeaveAdjustmentAmount(body.days);
+  const days = normalizeSignedLeaveDays(direction === "deduct" ? -amount : amount, "Adjustment days");
+  const reason = String(body.reason || "").trim();
+  if (!reason) throw new Error("Adjustment reason is required.");
+
+  const year = Number(employee.leavePolicyYear || currentLeaveYear());
+  const summary = leaveSummary(employee, db.leaveRequests, {
+    year,
+    adjustments: leaveAdjustmentTotal(db, employee.id, year)
+  });
+  if (days < 0 && summary.available + days < 0) {
+    throw new Error(`This deduction would reduce ${employee.name}'s available leave below 0.`);
+  }
+
+  const createdAt = nowIso();
+  const currentEntitlement = normalizeLeaveDays(employee.leaveEntitlement ?? 0, "Leave entitlement");
+  employee.leaveEntitlement = normalizeLeaveDays(currentEntitlement + days, "Leave entitlement");
+  employee.updatedAt = createdAt;
+  const adjustment = {
+    id: id("adjust"),
+    employeeId: employee.id,
+    actorId: actor.id,
+    year,
+    days,
+    reason,
+    createdAt
+  };
+  if (!Array.isArray(db.leaveAdjustments)) db.leaveAdjustments = [];
+  db.leaveAdjustments.unshift(adjustment);
+
+  addAuditEvent(db, actor, {
+    action: days > 0 ? "leave.adjustment_added" : "leave.adjustment_deducted",
+    affectedUserId: employee.id,
+    relatedType: "leave_adjustment",
+    relatedId: adjustment.id,
+    summary: `${actor.name} ${days > 0 ? "added" : "deducted"} ${Math.abs(days)} leave day${Math.abs(days) === 1 ? "" : "s"} for ${employee.name}.`,
+    metadata: {
+      days,
+      year,
+      reason,
+      previousEntitlement: currentEntitlement,
+      newEntitlement: employee.leaveEntitlement
+    }
+  });
+
+  return adjustment;
 }
 
 async function createLeaveRequest(db, user, body) {
@@ -1977,6 +2317,7 @@ async function handleApi(req, res, pathname) {
 
   if ((req.method === "GET" || req.method === "POST") && pathname === "/api/run-leave-rollover") {
     const cronSecret = process.env.CRON_SECRET;
+    let actor = null;
     if (cronSecret) {
       const authHeader = req.headers.authorization || "";
       if (authHeader !== `Bearer ${cronSecret}`) {
@@ -1985,17 +2326,20 @@ async function handleApi(req, res, pathname) {
     } else {
       const admin = requireUser(req, db);
       requireAdmin(admin);
+      actor = admin;
     }
 
     const asOfDate = body.asOfDate ? assertIsoDate(String(body.asOfDate), "Rollover date") : new Date();
     const rollover = applyLeaveYearRollover(db, asOfDate);
     const anniversaryAccrual = applyServiceAnniversaryAccrual(db, asOfDate);
-    if (rollover.changed || anniversaryAccrual.changed) await saveDb(db);
+    const auditEvents = addMaintenanceAuditEvents(db, actor, { rollover, anniversaryAccrual });
+    if (rollover.changed || anniversaryAccrual.changed || auditEvents) await saveDb(db);
     return jsonResponse(res, 200, { data: { rollover, anniversaryAccrual } });
   }
 
   if ((req.method === "GET" || req.method === "POST") && pathname === "/api/run-service-anniversary-accrual") {
     const cronSecret = process.env.CRON_SECRET;
+    let actor = null;
     if (cronSecret) {
       const authHeader = req.headers.authorization || "";
       if (authHeader !== `Bearer ${cronSecret}`) {
@@ -2004,16 +2348,19 @@ async function handleApi(req, res, pathname) {
     } else {
       const admin = requireUser(req, db);
       requireAdmin(admin);
+      actor = admin;
     }
 
     const asOfDate = body.asOfDate ? assertIsoDate(String(body.asOfDate), "Accrual date") : new Date();
     const anniversaryAccrual = applyServiceAnniversaryAccrual(db, asOfDate);
-    if (anniversaryAccrual.changed) await saveDb(db);
+    const auditEvents = addMaintenanceAuditEvents(db, actor, { anniversaryAccrual });
+    if (anniversaryAccrual.changed || auditEvents) await saveDb(db);
     return jsonResponse(res, 200, { data: anniversaryAccrual });
   }
 
   if ((req.method === "GET" || req.method === "POST") && pathname === "/api/run-receipt-retention") {
     const cronSecret = process.env.CRON_SECRET;
+    let actor = null;
     if (cronSecret) {
       const authHeader = req.headers.authorization || "";
       if (authHeader !== `Bearer ${cronSecret}`) {
@@ -2022,11 +2369,13 @@ async function handleApi(req, res, pathname) {
     } else {
       const admin = requireUser(req, db);
       requireAdmin(admin);
+      actor = admin;
     }
 
     const asOfDate = body.asOfDate ? assertIsoDate(String(body.asOfDate), "Retention date") : new Date();
     const receiptRetention = await applyReceiptRetention(db, asOfDate);
-    if (receiptRetention.changed) await saveDb(db);
+    const auditEvents = addMaintenanceAuditEvents(db, actor, { receiptRetention });
+    if (receiptRetention.changed || auditEvents) await saveDb(db);
     return jsonResponse(res, 200, { data: receiptRetention });
   }
 
@@ -2041,7 +2390,8 @@ async function handleApi(req, res, pathname) {
     const rollover = applyLeaveYearRollover(db);
     const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
     const receiptRetention = await applyReceiptRetention(db);
-    if (rollover.changed || anniversaryAccrual.changed || receiptRetention.changed) await saveDb(db);
+    const auditEvents = addMaintenanceAuditEvents(db, null, { rollover, anniversaryAccrual, receiptRetention });
+    if (rollover.changed || anniversaryAccrual.changed || receiptRetention.changed || auditEvents) await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
         holidays: {
@@ -2061,6 +2411,13 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/account/password") {
     changePassword(user, body);
     keepOnlyCurrentSession(db, user.id, parseCookies(req).cls_session);
+    addAuditEvent(db, user, {
+      action: "account.password_changed",
+      affectedUserId: user.id,
+      relatedType: "employee",
+      relatedId: user.id,
+      summary: `${user.name} changed their login password.`
+    });
     await saveDb(db);
     return jsonResponse(res, 200, { data: { dashboard: dashboard(db, user) } });
   }
@@ -2081,20 +2438,48 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: emailPage(db, user, searchParams) });
   }
 
+  if (req.method === "GET" && pathname === "/api/audit-events") {
+    return jsonResponse(res, 200, { data: auditPage(db, user, searchParams) });
+  }
+
   if (req.method === "POST" && pathname === "/api/claim-receipts/upload-url") {
     return jsonResponse(res, 200, { data: await createReceiptUploadUrl(user, body) });
+  }
+
+  if (req.method === "POST" && pathname === "/api/leave-adjustments") {
+    requireAdmin(user);
+    const adjustment = createLeaveAdjustment(db, user, body);
+    await saveDb(db);
+    return jsonResponse(res, 201, { data: { adjustment, dashboard: dashboard(db, user) } });
   }
 
   if (req.method === "POST" && pathname === "/api/employees") {
     requireAdmin(user);
     const employee = await createEmployee(db, body);
+    addAuditEvent(db, user, {
+      action: "employee.created",
+      affectedUserId: employee.id,
+      relatedType: "employee",
+      relatedId: employee.id,
+      summary: `Created employee ${employee.name}.`,
+      metadata: {
+        role: employee.role,
+        manager: auditUserName(db, employee.managerId),
+        annualLeaveEntitlement: employee.annualLeaveEntitlement,
+        medicalClaimLimit: employee.medicalClaimLimit
+      }
+    });
     await saveDb(db);
     return jsonResponse(res, 201, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
   }
 
   if (req.method === "PATCH" && pathname === "/api/employees/bulk") {
     requireAdmin(user);
+    const beforeUsers = Object.fromEntries(db.users.map((employee) => [employee.id, publicUser(employee)]));
     const employees = updateEmployees(db, body);
+    employees.forEach((employee) => {
+      addEmployeeUpdateAudit(db, user, beforeUsers[employee.id], employee);
+    });
     await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
@@ -2109,6 +2494,13 @@ async function handleApi(req, res, pathname) {
     requireAdmin(user);
     const { employee } = resetEmployeePassword(db, employeePasswordMatch[1], body);
     keepOnlyCurrentSession(db, employee.id, parseCookies(req).cls_session);
+    addAuditEvent(db, user, {
+      action: "employee.password_reset",
+      affectedUserId: employee.id,
+      relatedType: "employee",
+      relatedId: employee.id,
+      summary: `Reset login password for ${employee.name}.`
+    });
     await saveDb(db);
     return jsonResponse(res, 200, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
   }
@@ -2116,13 +2508,28 @@ async function handleApi(req, res, pathname) {
   const employeeMatch = pathname.match(/^\/api\/employees\/([^/]+)$/);
   if (employeeMatch && req.method === "PATCH") {
     requireAdmin(user);
+    const before = publicUser(getUser(db, employeeMatch[1]));
     const employee = updateEmployee(db, employeeMatch[1], body);
+    addEmployeeUpdateAudit(db, user, before, employee);
     await saveDb(db);
     return jsonResponse(res, 200, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
   }
 
   if (req.method === "POST" && pathname === "/api/leave-requests") {
     const request = await createLeaveRequest(db, user, body);
+    addAuditEvent(db, user, {
+      action: "leave.submitted",
+      affectedUserId: user.id,
+      relatedType: "leave",
+      relatedId: request.id,
+      summary: `${user.name} submitted ${request.type} from ${request.startDate} to ${request.endDate} (${request.days} working day${request.days === 1 ? "" : "s"}).`,
+      metadata: {
+        startDate: request.startDate,
+        endDate: request.endDate,
+        days: request.days,
+        excludedDates: request.excludedDates
+      }
+    });
     await saveDb(db);
     return jsonResponse(res, 201, { data: { request, dashboard: dashboard(db, user) } });
   }
@@ -2130,6 +2537,17 @@ async function handleApi(req, res, pathname) {
   const leaveDecisionMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/status$/);
   if (leaveDecisionMatch && req.method === "PATCH") {
     const request = await decideLeaveRequest(db, user, leaveDecisionMatch[1], body);
+    addAuditEvent(db, user, {
+      action: request.status === "approved" ? "leave.approved" : "leave.rejected",
+      affectedUserId: request.employeeId,
+      relatedType: "leave",
+      relatedId: request.id,
+      summary: `${user.name} ${request.status === "approved" ? "approved" : "did not approve"} leave for ${auditUserName(db, request.employeeId)} from ${request.startDate} to ${request.endDate}.`,
+      metadata: {
+        status: request.status,
+        decisionNote: request.decisionNote
+      }
+    });
     await saveDb(db);
     return jsonResponse(res, 200, { data: { request, dashboard: dashboard(db, user) } });
   }
@@ -2158,7 +2576,24 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && (pathname === "/api/medical-claims" || pathname === "/api/claims")) {
+    const beforeClaimCount = db.medicalClaims.length;
     const claim = await createClaim(db, user, body);
+    if (db.medicalClaims.length > beforeClaimCount) {
+      addAuditEvent(db, user, {
+        action: "claim.submitted",
+        affectedUserId: user.id,
+        relatedType: "claim",
+        relatedId: claim.id,
+        summary: `${user.name} submitted a ${claim.claimType === "general" ? "general" : "medical"} claim for $${Number(claim.amount).toFixed(2)} from ${claim.provider}.`,
+        metadata: {
+          category: claim.category,
+          claimType: claim.claimType,
+          claimDate: claim.claimDate,
+          amount: claim.amount,
+          hasReceipt: Boolean(claim.receipt)
+        }
+      });
+    }
     await saveDb(db);
     return jsonResponse(res, 201, { data: { claim, dashboard: dashboard(db, user) } });
   }
@@ -2166,6 +2601,20 @@ async function handleApi(req, res, pathname) {
   const claimDecisionMatch = pathname.match(/^\/api\/(?:medical-claims|claims)\/([^/]+)\/status$/);
   if (claimDecisionMatch && req.method === "PATCH") {
     const claim = await decideClaim(db, user, claimDecisionMatch[1], body);
+    addAuditEvent(db, user, {
+      action: claim.status === "approved" ? "claim.approved" : "claim.rejected",
+      affectedUserId: claim.employeeId,
+      relatedType: "claim",
+      relatedId: claim.id,
+      summary: `${user.name} ${claim.status === "approved" ? "approved" : "did not approve"} ${claim.claimType === "general" ? "a general" : "a medical"} claim for ${auditUserName(db, claim.employeeId)}.`,
+      metadata: {
+        status: claim.status,
+        decisionNote: claim.decisionNote,
+        amount: claim.amount,
+        category: claim.category,
+        claimType: claim.claimType
+      }
+    });
     await saveDb(db);
     return jsonResponse(res, 200, { data: { claim, dashboard: dashboard(db, user) } });
   }
@@ -2231,6 +2680,11 @@ if (require.main === module) {
 module.exports = {
   handleRequest,
   __test: {
+    addAuditEvent,
+    addMaintenanceAuditEvents,
+    applyLeaveYearRollover,
+    auditPage,
+    createLeaveAdjustment,
     multipartBoundary,
     parseMultipartBuffer,
     parseReceipt,

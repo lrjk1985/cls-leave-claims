@@ -83,3 +83,255 @@ test("resetEmployeePassword sets a new temporary password", () => {
     /Temporary password must be at least 8 characters/
   );
 });
+
+test("addAuditEvent records actor details and redacts secrets", () => {
+  const db = {
+    users: [
+      {
+        id: "usr_admin",
+        name: "Admin",
+        email: "admin@cls.local",
+        role: "admin"
+      },
+      {
+        id: "usr_employee",
+        name: "Employee",
+        email: "employee@cls.local",
+        role: "employee"
+      }
+    ],
+    auditEvents: []
+  };
+
+  const event = __test.addAuditEvent(db, db.users[0], {
+    action: "employee.password_reset",
+    affectedUserId: "usr_employee",
+    relatedType: "employee",
+    relatedId: "usr_employee",
+    summary: "Reset login password for Employee.",
+    metadata: {
+      temporaryPassword: "welcome123",
+      nested: { passwordHash: "hash-value" },
+      safe: "kept"
+    }
+  });
+
+  assert.equal(db.auditEvents.length, 1);
+  assert.equal(event.actorName, "Admin");
+  assert.equal(event.affectedUserName, "Employee");
+  assert.equal(event.metadata.temporaryPassword, "[redacted]");
+  assert.equal(event.metadata.nested.passwordHash, "[redacted]");
+  assert.equal(event.metadata.safe, "kept");
+});
+
+test("auditPage is admin-only and searchable", () => {
+  const db = {
+    users: [
+      {
+        id: "usr_admin",
+        name: "Admin",
+        email: "admin@cls.local",
+        role: "admin"
+      },
+      {
+        id: "usr_employee",
+        name: "Employee",
+        email: "employee@cls.local",
+        role: "employee"
+      }
+    ],
+    auditEvents: []
+  };
+  __test.addAuditEvent(db, db.users[0], {
+    action: "leave.approved",
+    affectedUserId: "usr_employee",
+    relatedType: "leave",
+    relatedId: "leave_1",
+    summary: "Admin approved leave for Employee."
+  });
+
+  const searchParams = new URLSearchParams({ query: "leave_1" });
+  const page = __test.auditPage(db, db.users[0], searchParams);
+  assert.equal(page.total, 1);
+  assert.equal(page.items[0].relatedId, "leave_1");
+  assert.throws(
+    () => __test.auditPage(db, db.users[1], new URLSearchParams()),
+    /Admin access is required/
+  );
+});
+
+test("addMaintenanceAuditEvents records system maintenance changes", () => {
+  const db = {
+    users: [],
+    auditEvents: []
+  };
+
+  const added = __test.addMaintenanceAuditEvents(db, null, {
+    rollover: {
+      changed: true,
+      year: 2027,
+      processed: [{ userId: "usr_1", leaveEntitlement: 15 }]
+    },
+    receiptRetention: {
+      changed: true,
+      cutoff: "2021-01-01T00:00:00.000Z",
+      retentionYears: 5,
+      deleted: 2,
+      failed: 0,
+      errors: []
+    }
+  });
+
+  assert.equal(added, 2);
+  assert.equal(db.auditEvents.length, 2);
+  assert.equal(db.auditEvents[0].action, "maintenance.receipt_retention");
+  assert.equal(db.auditEvents[1].action, "maintenance.leave_rollover");
+  assert.equal(db.auditEvents[0].actorName, "System");
+});
+
+test("applyLeaveYearRollover grants annual birthday leave", () => {
+  const db = {
+    users: [
+      {
+        id: "usr_employee",
+        name: "Employee",
+        email: "employee@cls.local",
+        role: "employee",
+        leavePolicyYear: 2025,
+        leaveEntitlement: 14,
+        annualLeaveEntitlement: 14,
+        startingLeaveEntitlement: 14,
+        carriedForwardLeave: 0,
+        birthdayLeaveEntitlement: 0
+      }
+    ],
+    leaveRequests: [
+      {
+        id: "leave_1",
+        employeeId: "usr_employee",
+        leaveYear: 2025,
+        status: "approved",
+        days: 13,
+        startDate: "2025-12-01"
+      }
+    ],
+    leaveAdjustments: []
+  };
+
+  const rollover = __test.applyLeaveYearRollover(db, new Date("2026-01-01T00:00:00Z"));
+
+  assert.equal(rollover.changed, true);
+  assert.equal(db.users[0].leavePolicyYear, 2026);
+  assert.equal(db.users[0].birthdayLeaveEntitlement, 1);
+  assert.equal(db.users[0].carriedForwardLeave, 1);
+  assert.equal(db.users[0].leaveEntitlement, 16);
+  assert.equal(rollover.processed[0].birthdayLeave, 1);
+});
+
+test("createLeaveAdjustment applies half-day leave credits and audits them", () => {
+  const year = new Date().getFullYear();
+  const admin = {
+    id: "usr_admin",
+    name: "Admin",
+    email: "admin@cls.local",
+    role: "admin"
+  };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leavePolicyYear: year,
+    leaveEntitlement: 14,
+    annualLeaveEntitlement: 14,
+    carriedForwardLeave: 0
+  };
+  const db = {
+    users: [admin, employee],
+    leaveRequests: [],
+    leaveAdjustments: [],
+    auditEvents: []
+  };
+
+  const adjustment = __test.createLeaveAdjustment(db, admin, {
+    employeeId: "usr_employee",
+    direction: "add",
+    days: "0.5",
+    reason: "Manual half-day credit"
+  });
+
+  assert.equal(adjustment.days, 0.5);
+  assert.equal(employee.leaveEntitlement, 14.5);
+  assert.equal(db.leaveAdjustments.length, 1);
+  assert.equal(db.auditEvents[0].action, "leave.adjustment_added");
+});
+
+test("createLeaveAdjustment rejects quarter-day adjustments", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leaveEntitlement: 14,
+    annualLeaveEntitlement: 14,
+    carriedForwardLeave: 0
+  };
+  const db = {
+    users: [admin, employee],
+    leaveRequests: [],
+    leaveAdjustments: [],
+    auditEvents: []
+  };
+
+  assert.throws(
+    () => __test.createLeaveAdjustment(db, admin, {
+      employeeId: "usr_employee",
+      direction: "add",
+      days: "0.25",
+      reason: "Invalid increment"
+    }),
+    /half-day increments/
+  );
+});
+
+test("createLeaveAdjustment prevents deductions below available leave", () => {
+  const year = new Date().getFullYear();
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leavePolicyYear: year,
+    leaveEntitlement: 1,
+    annualLeaveEntitlement: 1,
+    carriedForwardLeave: 0
+  };
+  const db = {
+    users: [admin, employee],
+    leaveRequests: [
+      {
+        id: "leave_1",
+        employeeId: "usr_employee",
+        managerId: "usr_admin",
+        leaveYear: year,
+        days: 1,
+        status: "approved",
+        startDate: `${year}-01-02`
+      }
+    ],
+    leaveAdjustments: [],
+    auditEvents: []
+  };
+
+  assert.throws(
+    () => __test.createLeaveAdjustment(db, admin, {
+      employeeId: "usr_employee",
+      direction: "deduct",
+      days: "0.5",
+      reason: "Correction"
+    }),
+    /available leave below 0/
+  );
+});

@@ -60,6 +60,8 @@ test("leaveSummary separates approved and pending leave days", () => {
     entitlement: 14,
     baseEntitlement: 14,
     carriedForward: 0,
+    birthdayLeave: 0,
+    adjustments: 0,
     approved: 3,
     pending: 2,
     available: 11
@@ -102,8 +104,9 @@ test("nextLeaveYearBalance carries forward unused leave into the new year", () =
     year: 2026,
     previousYear: 2025,
     carriedForward: 1,
+    birthdayLeave: 1,
     baseEntitlement: 14,
-    entitlement: 15
+    entitlement: 16
   });
 });
 
@@ -121,7 +124,8 @@ test("nextLeaveYearBalance keeps manually set annual leave as the base", () => {
   const balance = nextLeaveYearBalance(user, [], 2026);
 
   assert.equal(balance.baseEntitlement, 24);
-  assert.equal(balance.entitlement, 48);
+  assert.equal(balance.birthdayLeave, 1);
+  assert.equal(balance.entitlement, 49);
 });
 
 test("medicalClaimSummary tracks approved, pending, available, and unreserved amounts", () => {

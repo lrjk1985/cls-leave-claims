@@ -1,5 +1,6 @@
 const VALID_DECISIONS = new Set(["approved", "rejected"]);
 const MAX_ANNUAL_LEAVE_DAYS = 18;
+const ANNUAL_BIRTHDAY_LEAVE_DAYS = 1;
 
 function assertIsoDate(value, fieldName) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -99,6 +100,14 @@ function normalizeLeaveDays(value, fieldName = "Leave days") {
   return Math.round(days * 100) / 100;
 }
 
+function normalizeSignedLeaveDays(value, fieldName = "Leave days") {
+  const days = Number(value);
+  if (!Number.isFinite(days)) {
+    throw new Error(`${fieldName} must be a valid number.`);
+  }
+  return Math.round(days * 100) / 100;
+}
+
 function canAdmin(user) {
   return Boolean(user && user.role === "admin");
 }
@@ -156,6 +165,11 @@ function leaveRequestYear(request) {
 
 function leaveSummary(user, leaveRequests, options = {}) {
   const year = Number(options.year || user.leavePolicyYear || currentLeaveYear());
+  const adjustments = normalizeSignedLeaveDays(options.adjustments ?? 0, "Leave adjustments");
+  const birthdayLeave = normalizeLeaveDays(
+    options.birthdayLeave ?? user.birthdayLeaveEntitlement ?? 0,
+    "Birthday leave"
+  );
   const entitlement = normalizeLeaveDays(
     options.entitlementOverride ?? user.leaveEntitlement ?? 0,
     "Leave entitlement"
@@ -174,6 +188,8 @@ function leaveSummary(user, leaveRequests, options = {}) {
     entitlement,
     baseEntitlement: normalizeLeaveDays(user.annualLeaveEntitlement ?? entitlement, "Annual leave entitlement"),
     carriedForward: normalizeLeaveDays(user.carriedForwardLeave ?? 0, "Carried forward leave"),
+    birthdayLeave,
+    adjustments,
     approved: normalizeLeaveDays(approved, "Approved leave"),
     pending: normalizeLeaveDays(pending, "Pending leave"),
     available: normalizeLeaveDays(Math.max(0, entitlement - approved), "Available leave")
@@ -191,13 +207,15 @@ function nextLeaveYearBalance(user, leaveRequests, nextYear) {
     user.annualLeaveEntitlement ?? user.startingLeaveEntitlement ?? user.leaveEntitlement ?? 0,
     "Annual leave entitlement"
   );
+  const birthdayLeave = normalizeLeaveDays(ANNUAL_BIRTHDAY_LEAVE_DAYS, "Birthday leave");
 
   return {
     year: Number(nextYear),
     previousYear,
     carriedForward,
+    birthdayLeave,
     baseEntitlement,
-    entitlement: normalizeLeaveDays(baseEntitlement + carriedForward, "Leave entitlement")
+    entitlement: normalizeLeaveDays(baseEntitlement + carriedForward + birthdayLeave, "Leave entitlement")
   };
 }
 
@@ -262,6 +280,7 @@ function assertDecision(status) {
 module.exports = {
   assertDecision,
   assertIsoDate,
+  ANNUAL_BIRTHDAY_LEAVE_DAYS,
   canAdmin,
   canReview,
   canSeeEmployee,
@@ -277,6 +296,7 @@ module.exports = {
   medicalClaimSummary,
   nextLeaveYearBalance,
   normalizeLeaveDays,
+  normalizeSignedLeaveDays,
   normalizeMoney,
   serviceAdjustedAnnualLeave,
   workingDaysBetween
