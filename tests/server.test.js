@@ -228,6 +228,85 @@ test("applyLeaveYearRollover grants annual birthday leave", () => {
   assert.equal(rollover.processed[0].birthdayLeave, 1);
 });
 
+test("cancelLeaveRequest lets applicants cancel approved leave and notifies calendars", async () => {
+  const manager = {
+    id: "usr_manager",
+    name: "Manager",
+    email: "manager@cls.local",
+    role: "manager"
+  };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager"
+  };
+  const db = {
+    users: [manager, employee],
+    leaveRequests: [
+      {
+        id: "leave_1",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        type: "Annual Leave",
+        startDate: "2026-06-10",
+        endDate: "2026-06-10",
+        days: 1,
+        leaveYear: 2026,
+        excludedDates: [],
+        reason: "Family",
+        status: "approved",
+        decisionNote: "",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        decidedAt: "2026-06-02T00:00:00.000Z",
+        decidedBy: "usr_manager"
+      }
+    ],
+    emails: []
+  };
+
+  const { request, previousStatus } = await __test.cancelLeaveRequest(db, employee, "leave_1", {
+    reason: "Plans changed"
+  });
+
+  assert.equal(previousStatus, "approved");
+  assert.equal(request.status, "cancelled");
+  assert.equal(request.cancellationNote, "Plans changed");
+  assert.equal(request.cancelledBy, "usr_employee");
+  assert.equal(db.emails.length, 2);
+  assert.equal(db.emails[0].recipientId, "usr_employee");
+  assert.equal(db.emails[1].recipientId, "usr_manager");
+});
+
+test("cancelLeaveRequest only allows the applicant to cancel", async () => {
+  const manager = { id: "usr_manager", name: "Manager", email: "manager@cls.local", role: "manager" };
+  const employee = { id: "usr_employee", name: "Employee", email: "employee@cls.local", role: "employee" };
+  const db = {
+    users: [manager, employee],
+    leaveRequests: [
+      {
+        id: "leave_1",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        type: "Annual Leave",
+        startDate: "2026-06-10",
+        endDate: "2026-06-10",
+        days: 1,
+        leaveYear: 2026,
+        status: "pending"
+      }
+    ],
+    emails: []
+  };
+
+  await assert.rejects(
+    () => __test.cancelLeaveRequest(db, manager, "leave_1"),
+    /Only the leave applicant can cancel/
+  );
+});
+
 test("createLeaveAdjustment applies half-day leave credits and audits them", () => {
   const year = new Date().getFullYear();
   const admin = {

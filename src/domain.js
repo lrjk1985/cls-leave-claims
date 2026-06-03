@@ -268,6 +268,7 @@ function generalClaimSummary(user, claims) {
 function decisionLabel(status) {
   if (status === "approved") return "Approved";
   if (status === "rejected") return "Not Approved";
+  if (status === "cancelled") return "Cancelled";
   return "Pending";
 }
 

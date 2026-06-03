@@ -51,6 +51,7 @@ test("leaveSummary separates approved and pending leave days", () => {
   const summary = leaveSummary(user, [
     { employeeId: "u1", leaveYear: 2026, status: "approved", days: 3 },
     { employeeId: "u1", leaveYear: 2026, status: "pending", days: 2 },
+    { employeeId: "u1", leaveYear: 2026, status: "cancelled", days: 5 },
     { employeeId: "u1", leaveYear: 2025, status: "approved", days: 9 },
     { employeeId: "u2", leaveYear: 2026, status: "approved", days: 9 }
   ]);

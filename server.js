@@ -993,9 +993,15 @@ function addDays(date, days) {
 }
 
 function makeLeaveCalendarAttachment({ request, employee, reviewer, status = "TENTATIVE" }) {
-  const calendarStatus = status === "CONFIRMED" ? "CONFIRMED" : "TENTATIVE";
+  const calendarStatus = status === "CANCELLED"
+    ? "CANCELLED"
+    : status === "CONFIRMED"
+      ? "CONFIRMED"
+      : "TENTATIVE";
   const description = [
-    `${employee.name} is on leave from ${request.startDate} to ${request.endDate}.`,
+    calendarStatus === "CANCELLED"
+      ? `${employee.name}'s leave from ${request.startDate} to ${request.endDate} has been cancelled.`
+      : `${employee.name} is on leave from ${request.startDate} to ${request.endDate}.`,
     `${request.days} deductible working day(s).`,
     request.reason ? `Reason: ${request.reason}` : "",
     reviewer ? `Reviewed by: ${reviewer.name}` : ""
@@ -1008,13 +1014,13 @@ function makeLeaveCalendarAttachment({ request, employee, reviewer, status = "TE
     "VERSION:2.0",
     "PRODID:-//CLS Leave Claims//EN",
     "CALSCALE:GREGORIAN",
-    "METHOD:PUBLISH",
+    `METHOD:${calendarStatus === "CANCELLED" ? "CANCEL" : "PUBLISH"}`,
     "BEGIN:VEVENT",
     `UID:${request.id}@cls-leave-claims`,
     `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z")}`,
     `DTSTART;VALUE=DATE:${isoDateToIcs(request.startDate)}`,
     `DTEND;VALUE=DATE:${isoDateToIcs(addDays(request.endDate, 1))}`,
-    `SUMMARY:${escapeIcsText(`${employee.name} on leave`)}`,
+    `SUMMARY:${escapeIcsText(calendarStatus === "CANCELLED" ? `${employee.name} leave cancelled` : `${employee.name} on leave`)}`,
     `DESCRIPTION:${escapeIcsText(description)}`,
     `STATUS:${calendarStatus}`,
     "TRANSP:OPAQUE",
@@ -2150,6 +2156,82 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
   return request;
 }
 
+async function cancelLeaveRequest(db, user, requestId, body = {}) {
+  const request = db.leaveRequests.find((item) => item.id === requestId);
+  if (!request) {
+    const error = new Error("Leave request was not found.");
+    error.status = 404;
+    throw error;
+  }
+  if (request.employeeId !== user.id) {
+    const error = new Error("Only the leave applicant can cancel this leave request.");
+    error.status = 403;
+    throw error;
+  }
+  if (!["pending", "approved"].includes(request.status)) {
+    throw new Error("Only pending or approved leave requests can be cancelled.");
+  }
+
+  const previousStatus = request.status;
+  const cancelledAt = nowIso();
+  request.status = "cancelled";
+  request.cancellationNote = String(body.reason || body.cancellationNote || "").trim();
+  request.cancelledAt = cancelledAt;
+  request.cancelledBy = user.id;
+  request.updatedAt = cancelledAt;
+
+  const manager = getUser(db, request.managerId);
+  const managerBody = [
+    `${user.name} has cancelled ${previousStatus === "approved" ? "an approved" : "a pending"} leave request from ${request.startDate} to ${request.endDate}.`,
+    previousStatus === "approved"
+      ? "Use the attached calendar file to remove this leave period from your calendar."
+      : "No approval action is needed. Use the attached calendar file to remove the tentative leave period from your calendar."
+  ].join("\n\n");
+
+  await addEmail(db, {
+    recipientId: request.managerId,
+    type: "leave_cancelled",
+    subject: `Leave request cancelled: ${user.name}`,
+    body: managerBody,
+    relatedId: request.id
+  }, {
+    attachments: manager
+      ? [
+          makeLeaveCalendarAttachment({
+            request,
+            employee: user,
+            reviewer: manager,
+            status: "CANCELLED"
+          })
+        ]
+      : []
+  });
+
+  if (previousStatus === "approved") {
+    await addEmail(db, {
+      recipientId: user.id,
+      type: "leave_cancelled_confirmation",
+      subject: "Leave request cancelled",
+      body: [
+        `Your approved leave request from ${request.startDate} to ${request.endDate} has been cancelled.`,
+        "Use the attached calendar file to remove this leave period from your calendar."
+      ].join("\n\n"),
+      relatedId: request.id
+    }, {
+      attachments: [
+        makeLeaveCalendarAttachment({
+          request,
+          employee: user,
+          reviewer: manager,
+          status: "CANCELLED"
+        })
+      ]
+    });
+  }
+
+  return { request, previousStatus };
+}
+
 async function createClaim(db, user, body) {
   if (!user.managerId) {
     throw new Error("No Direct Report / approver has been assigned to your profile yet.");
@@ -2534,6 +2616,27 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 201, { data: { request, dashboard: dashboard(db, user) } });
   }
 
+  const leaveCancelMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/cancel$/);
+  if (leaveCancelMatch && req.method === "PATCH") {
+    const { request, previousStatus } = await cancelLeaveRequest(db, user, leaveCancelMatch[1], body);
+    addAuditEvent(db, user, {
+      action: "leave.cancelled",
+      affectedUserId: user.id,
+      relatedType: "leave",
+      relatedId: request.id,
+      summary: `${user.name} cancelled ${previousStatus} leave from ${request.startDate} to ${request.endDate}.`,
+      metadata: {
+        previousStatus,
+        cancellationNote: request.cancellationNote,
+        startDate: request.startDate,
+        endDate: request.endDate,
+        days: request.days
+      }
+    });
+    await saveDb(db);
+    return jsonResponse(res, 200, { data: { request, dashboard: dashboard(db, user) } });
+  }
+
   const leaveDecisionMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/status$/);
   if (leaveDecisionMatch && req.method === "PATCH") {
     const request = await decideLeaveRequest(db, user, leaveDecisionMatch[1], body);
@@ -2684,6 +2787,7 @@ module.exports = {
     addMaintenanceAuditEvents,
     applyLeaveYearRollover,
     auditPage,
+    cancelLeaveRequest,
     createLeaveAdjustment,
     multipartBoundary,
     parseMultipartBuffer,

@@ -129,6 +129,7 @@ function dateTimeText(value) {
 function statusLabel(status) {
   if (status === "approved") return "Approved";
   if (status === "rejected") return "Not Approved";
+  if (status === "cancelled") return "Cancelled";
   return "Pending";
 }
 
@@ -408,7 +409,8 @@ function renderHistoryFilters(kind) {
   const statusOptions = [
     { value: "all", label: "All Status" },
     { value: "approved", label: "Approved" },
-    { value: "rejected", label: "Not Approved" }
+    { value: "rejected", label: "Not Approved" },
+    ...(kind === "leave" ? [{ value: "cancelled", label: "Cancelled" }] : [])
   ];
 
   return `
@@ -1025,6 +1027,19 @@ function renderDecisionControls(type, item) {
   `;
 }
 
+function canCancelLeave(item) {
+  return item.employeeId === state.dashboard.user.id && ["pending", "approved"].includes(item.status);
+}
+
+function renderLeaveApplicantControls(item) {
+  if (!canCancelLeave(item)) return "";
+  return `
+    <div class="actions leave-row-actions">
+      <button class="button reject small" data-action="cancel-leave" data-id="${item.id}">Cancel Leave</button>
+    </div>
+  `;
+}
+
 function excludedDatesText(item) {
   if (!Array.isArray(item.excludedDates) || !item.excludedDates.length) return "";
   const text = item.excludedDates
@@ -1065,7 +1080,9 @@ function renderLeaveTable(items, approvalsMode) {
               <td data-label="Status">${statusPill(item.status)}</td>
               <td data-label="${approvalsMode ? "Decision" : "Approver"}">
                 ${approvalsMode ? renderDecisionControls("leave", item) : escapeHtml(employeeName(item.managerId))}
+                ${!approvalsMode ? renderLeaveApplicantControls(item) : ""}
                 ${item.decisionNote ? `<div class="muted">${escapeHtml(item.decisionNote)}</div>` : ""}
+                ${item.cancellationNote ? `<div class="muted">${escapeHtml(item.cancellationNote)}</div>` : ""}
               </td>
             </tr>
           `).join("")}
@@ -1396,6 +1413,7 @@ function auditActionLabel(action) {
     "leave.submitted": "Leave Submitted",
     "leave.approved": "Leave Approved",
     "leave.rejected": "Leave Not Approved",
+    "leave.cancelled": "Leave Cancelled",
     "leave.adjustment_added": "Leave Added",
     "leave.adjustment_deducted": "Leave Deducted",
     "maintenance.leave_rollover": "Leave Rollover",
@@ -1670,6 +1688,16 @@ document.addEventListener("click", async (event) => {
       });
       updateDashboard(data);
       showToast(button.dataset.status === "approved" ? "Approved." : "Not approved.");
+    }
+
+    if (action === "cancel-leave") {
+      if (!window.confirm("Cancel this leave request?")) return;
+      const data = await api(`/api/leave-requests/${button.dataset.id}/cancel`, {
+        method: "PATCH",
+        body: "{}"
+      });
+      updateDashboard(data);
+      showToast("Leave request cancelled.");
     }
 
     if (action === "save-employee") {

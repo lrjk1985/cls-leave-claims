@@ -536,6 +536,11 @@ tr:last-child td {
   background: var(--red-2);
 }
 
+.status.cancelled {
+  color: var(--muted);
+  background: #eef2f5;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -668,6 +673,10 @@ tr:last-child td {
   display: grid;
   gap: 8px;
   min-width: 0;
+}
+
+.leave-row-actions {
+  margin-top: 8px;
 }
 
 .employee-directory {
