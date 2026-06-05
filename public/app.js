@@ -195,17 +195,104 @@ function resetAuditResults() {
   state.audit.requestId = (state.audit.requestId || 0) + 1;
 }
 
-function updateDashboard(data) {
-  if (data.dashboard) {
-    state.dashboard = data.dashboard;
-  } else {
-    state.dashboard = data;
+function upsertById(list, item) {
+  if (!item) return Array.isArray(list) ? list : [];
+  const current = Array.isArray(list) ? list : [];
+  const index = current.findIndex((entry) => entry.id === item.id);
+  if (index === -1) return [item, ...current];
+  return current.map((entry) => (entry.id === item.id ? item : entry));
+}
+
+function upsertPendingById(list, item) {
+  if (!item) return Array.isArray(list) ? list : [];
+  const current = Array.isArray(list) ? list : [];
+  const withoutItem = current.filter((entry) => entry.id !== item.id);
+  return item.status === "pending" ? [item, ...withoutItem] : withoutItem;
+}
+
+function mergeEmployee(employee) {
+  if (!state.dashboard || !employee) return;
+  state.dashboard.userById = {
+    ...(state.dashboard.userById || {}),
+    [employee.id]: employee
+  };
+  if (state.dashboard.user?.id === employee.id) {
+    state.dashboard.user = employee;
   }
+  if (Array.isArray(state.dashboard.users)) {
+    state.dashboard.users = upsertById(state.dashboard.users, employee);
+  }
+  if (Array.isArray(state.dashboard.allEmployees)) {
+    state.dashboard.allEmployees = upsertById(state.dashboard.allEmployees, employee);
+  }
+  if (Array.isArray(state.dashboard.teamMembers)) {
+    state.dashboard.teamMembers = (state.dashboard.allEmployees || state.dashboard.teamMembers)
+      .filter((item) => item.managerId === state.dashboard.user.id);
+  }
+}
+
+function applyDashboardPatch(patch = {}) {
+  if (!state.dashboard) return;
+  [
+    "leaveSummary",
+    "medicalLeaveSummary",
+    "medicalClaimSummary",
+    "generalClaimSummary",
+    "receiptStorageSummary",
+    "leaveAdjustments",
+    "emails",
+    "counts"
+  ].forEach((key) => {
+    if (patch[key] !== undefined) state.dashboard[key] = patch[key];
+  });
+
+  if (patch.user) mergeEmployee(patch.user);
+}
+
+function markStale(stale = {}) {
+  if (Array.isArray(stale.history)) {
+    stale.history.forEach((kind) => resetHistoryResults(kind));
+  }
+  if (stale.mail) resetMailResults();
+  if (stale.audit) resetAuditResults();
+}
+
+function updateDashboard(data) {
+  if (data.dashboard || data.userById) {
+    state.dashboard = data.dashboard;
+    if (!state.dashboard) state.dashboard = data;
+    state.passwordReset = { employeeId: null };
+    state.leaveAdjustment = { employeeId: null };
+    resetHistoryResults();
+    resetMailResults();
+    resetAuditResults();
+    render();
+    return;
+  }
+
+  if (!state.dashboard) {
+    state.dashboard = data;
+    render();
+    return;
+  }
+
+  if (data.patch) applyDashboardPatch(data.patch);
+  if (data.request) {
+    state.dashboard.leaveRequests = upsertPendingById(state.dashboard.leaveRequests, data.request);
+  }
+  if (data.claim) {
+    state.dashboard.medicalClaims = upsertPendingById(state.dashboard.medicalClaims, data.claim);
+  }
+  if (data.employee) {
+    mergeEmployee(data.employee);
+  }
+  if (Array.isArray(data.employees)) {
+    data.employees.forEach(mergeEmployee);
+  }
+  markStale(data.stale);
+
   state.passwordReset = { employeeId: null };
   state.leaveAdjustment = { employeeId: null };
-  resetHistoryResults();
-  resetMailResults();
-  resetAuditResults();
   render();
 }
 

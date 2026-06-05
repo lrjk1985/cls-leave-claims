@@ -1961,6 +1961,39 @@ function dashboard(db, user) {
   };
 }
 
+function dashboardPatch(db, user) {
+  const leaveYear = Number(user.leavePolicyYear || currentLeaveYear());
+  const currentLeaveAdjustments = leaveAdjustmentTotal(db, user.id, leaveYear);
+  const pendingLeaveRequests = visibleLeaveRequests(db, user).filter((request) => request.status === "pending");
+  const pendingMedicalClaims = visibleMedicalClaims(db, user).filter((claim) => claim.status === "pending");
+  const recentEmails = visibleEmails(db, user)
+    .slice()
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .slice(0, 4);
+
+  return {
+    user: publicUser(user),
+    leaveSummary: leaveSummary(user, db.leaveRequests, {
+      adjustments: currentLeaveAdjustments,
+      birthdayLeave: user.birthdayLeaveEntitlement
+    }),
+    medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
+    medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
+    generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
+    leaveAdjustments: canAdmin(user) ? (db.leaveAdjustments || []).slice(0, 10) : [],
+    emails: recentEmails,
+    counts: {
+      pendingLeave: pendingLeaveRequests.filter(
+        (request) => request.status === "pending" && canReview(user, request)
+      ).length,
+      pendingClaims: pendingMedicalClaims.filter(
+        (claim) => claim.status === "pending" && canReview(user, claim)
+      ).length
+    }
+  };
+}
+
 async function createEmployee(db, body) {
   const name = String(body.name || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
@@ -2699,7 +2732,12 @@ async function handleApi(req, res, pathname) {
       summary: `${user.name} changed their login password.`
     });
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        patch: dashboardPatch(db, user),
+        stale: { audit: true }
+      }
+    });
   }
 
   if (req.method === "GET" && pathname === "/api/dashboard") {
@@ -2733,8 +2771,16 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/leave-adjustments") {
     requireAdmin(user);
     const adjustment = createLeaveAdjustment(db, user, body);
+    const employee = getUser(db, adjustment.employeeId);
     await saveDb(db);
-    return jsonResponse(res, 201, { data: { adjustment, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 201, {
+      data: {
+        adjustment,
+        employee: publicUser(employee),
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
   }
 
   if (req.method === "POST" && pathname === "/api/employees") {
@@ -2756,7 +2802,13 @@ async function handleApi(req, res, pathname) {
       }
     });
     await saveDb(db);
-    return jsonResponse(res, 201, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 201, {
+      data: {
+        employee: publicUser(employee),
+        patch: dashboardPatch(db, user),
+        stale: { mail: true, audit: true }
+      }
+    });
   }
 
   if (req.method === "PATCH" && pathname === "/api/employees/bulk") {
@@ -2770,7 +2822,8 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, {
       data: {
         employees: employees.map(publicUser),
-        dashboard: dashboard(db, user)
+        patch: dashboardPatch(db, user),
+        stale: { audit: true }
       }
     });
   }
@@ -2788,7 +2841,13 @@ async function handleApi(req, res, pathname) {
       summary: `Reset login password for ${employee.name}.`
     });
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        employee: publicUser(employee),
+        patch: dashboardPatch(db, user),
+        stale: { audit: true }
+      }
+    });
   }
 
   const employeeMatch = pathname.match(/^\/api\/employees\/([^/]+)$/);
@@ -2798,7 +2857,13 @@ async function handleApi(req, res, pathname) {
     const employee = updateEmployee(db, employeeMatch[1], body);
     addEmployeeUpdateAudit(db, user, before, employee);
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { employee: publicUser(employee), dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        employee: publicUser(employee),
+        patch: dashboardPatch(db, user),
+        stale: { audit: true }
+      }
+    });
   }
 
   if (req.method === "POST" && pathname === "/api/leave-requests") {
@@ -2819,7 +2884,13 @@ async function handleApi(req, res, pathname) {
       }
     });
     await saveDb(db);
-    return jsonResponse(res, 201, { data: { request, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 201, {
+      data: {
+        request,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], mail: true, audit: true }
+      }
+    });
   }
 
   const leaveCancelMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/cancel$/);
@@ -2840,7 +2911,13 @@ async function handleApi(req, res, pathname) {
       }
     });
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { request, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        request,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], mail: true, audit: true }
+      }
+    });
   }
 
   const leaveDecisionMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/status$/);
@@ -2858,7 +2935,13 @@ async function handleApi(req, res, pathname) {
       }
     });
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { request, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        request,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], mail: true, audit: true }
+      }
+    });
   }
 
   const receiptMatch = pathname.match(/^\/api\/claims\/([^/]+)\/receipt$/);
@@ -2924,7 +3007,13 @@ async function handleApi(req, res, pathname) {
       });
     }
     await saveDb(db);
-    return jsonResponse(res, 201, { data: { claim, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 201, {
+      data: {
+        claim,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["claim"], mail: true, audit: true }
+      }
+    });
   }
 
   const claimDecisionMatch = pathname.match(/^\/api\/(?:medical-claims|claims)\/([^/]+)\/status$/);
@@ -2945,7 +3034,13 @@ async function handleApi(req, res, pathname) {
       }
     });
     await saveDb(db);
-    return jsonResponse(res, 200, { data: { claim, dashboard: dashboard(db, user) } });
+    return jsonResponse(res, 200, {
+      data: {
+        claim,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["claim"], mail: true, audit: true }
+      }
+    });
   }
 
   return jsonResponse(res, 404, { error: "Endpoint was not found." });
