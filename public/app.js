@@ -484,16 +484,28 @@ function receiptExtension(name) {
   return match ? match[0] : "";
 }
 
-function assertReceiptFile(file) {
+function assertAttachmentFile(file, label = "Receipt") {
   if (file.size > MAX_RECEIPT_BYTES) {
-    throw new Error("Receipt upload must be 5 MB or smaller.");
+    throw new Error(`${label} upload must be 5 MB or smaller.`);
   }
 
   const type = String(file.type || "").toLowerCase();
   const extension = receiptExtension(file.name);
   if (!RECEIPT_MIME_TYPES.has(type) && !RECEIPT_EXTENSIONS.has(extension)) {
-    throw new Error(`Receipt must be ${RECEIPT_HELP_TEXT}`);
+    throw new Error(`${label} must be ${RECEIPT_HELP_TEXT}`);
   }
+}
+
+function assertReceiptFile(file) {
+  assertAttachmentFile(file, "Receipt");
+}
+
+function assertMedicalCertificateFile(file) {
+  assertAttachmentFile(file, "Medical Certificate");
+}
+
+function isMedicalLeaveType(type) {
+  return String(type || "").trim().toLowerCase() === "medical leave";
 }
 
 function newClaimSubmissionId() {
@@ -535,6 +547,64 @@ async function uploadReceiptToSignedUrl(upload, file) {
   }
 }
 
+async function uploadMedicalCertificateToSignedUrl(upload, file) {
+  const response = await fetch(upload.signedUrl, {
+    method: upload.method || "PUT",
+    headers: {
+      "Content-Type": upload.mimeType || file.type || "application/octet-stream",
+      "cache-control": "3600"
+    },
+    body: file
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Medical Certificate upload failed: ${text || response.statusText}`);
+  }
+}
+
+async function leaveFormPayload(form, body) {
+  if (!isMedicalLeaveType(body.type)) {
+    const leaveBody = { ...body };
+    delete leaveBody.medicalCertificate;
+    return { body: JSON.stringify(leaveBody) };
+  }
+
+  const file = form.querySelector("input[type='file'][name='medicalCertificate']")?.files?.[0];
+  if (!file) {
+    throw new Error("Please upload a Medical Certificate for Medical Leave.");
+  }
+  assertMedicalCertificateFile(file);
+
+  const leaveBody = { ...body };
+  delete leaveBody.medicalCertificate;
+  const upload = await api("/api/leave-medical-certificates/upload-url", {
+    method: "POST",
+    body: JSON.stringify({
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      size: file.size
+    })
+  });
+  if (upload.direct) {
+    await uploadMedicalCertificateToSignedUrl(upload, file);
+    leaveBody.medicalCertificateUpload = {
+      storage: upload.storage,
+      bucket: upload.bucket,
+      storedName: upload.storedName,
+      originalName: upload.originalName,
+      mimeType: upload.mimeType,
+      size: upload.size
+    };
+    return { body: JSON.stringify(leaveBody) };
+  }
+
+  const formData = new FormData();
+  Object.entries(leaveBody).forEach(([key, value]) => formData.set(key, value));
+  formData.set("medicalCertificate", file, file.name);
+  return { body: formData };
+}
+
 async function claimFormPayload(form, body) {
   const category = body.category === "Others" ? "Others" : "Medical";
   const claimType = category === "Medical" ? "medical" : "general";
@@ -571,9 +641,9 @@ async function claimFormPayload(form, body) {
     };
   }
 
-  const formData = new FormData(form);
-  formData.set("category", category);
-  formData.set("claimType", claimType);
+  const formData = new FormData();
+  Object.entries(claimBody).forEach(([key, value]) => formData.set(key, value));
+  formData.set("receipt", file, file.name);
   return { body: formData, claimType };
 }
 
@@ -749,6 +819,12 @@ function renderLeaveAdjustmentDialog() {
 
 function renderMetrics() {
   const summary = state.dashboard.leaveSummary;
+  const medicalSummary = state.dashboard.medicalLeaveSummary || {
+    entitlement: 14,
+    available: 14,
+    pending: 0,
+    approved: 0
+  };
   return `
     <section class="metrics">
       <div class="metric">
@@ -774,6 +850,14 @@ function renderMetrics() {
       <div class="metric">
         <div class="metric-label">Leave Pending</div>
         <div class="metric-value">${summary.pending}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Medical Leave Available</div>
+        <div class="metric-value">${medicalSummary.available}</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Medical Leave Pending</div>
+        <div class="metric-value">${medicalSummary.pending}</div>
       </div>
     </section>
   `;
@@ -872,6 +956,11 @@ function renderLeave() {
                 <option>Urgent Leave</option>
                 <option>Unpaid Leave</option>
               </select>
+            </div>
+            <div class="field full" data-medical-certificate-field hidden>
+              <label for="leave-medical-certificate">Medical Certificate</label>
+              <input id="leave-medical-certificate" name="medicalCertificate" type="file" accept="${RECEIPT_ACCEPT}" disabled>
+              <div class="field-hint">${RECEIPT_HELP_TEXT}</div>
             </div>
             <div class="field">
               <label for="leave-start">Start Date</label>
@@ -1048,6 +1137,18 @@ function excludedDatesText(item) {
   return `<div class="muted">Excluded: ${escapeHtml(text)}</div>`;
 }
 
+function renderMedicalCertificateLink(item) {
+  if (!item.medicalCertificate?.storedName) return "";
+  const title = item.medicalCertificate.originalName || "Medical Certificate";
+  return `
+    <div>
+      <a class="receipt-link" href="/api/leave-requests/${item.id}/medical-certificate" target="_blank" rel="noreferrer" title="${escapeHtml(title)}">
+        Medical Certificate
+      </a>
+    </div>
+  `;
+}
+
 function renderLeaveTable(items, approvalsMode) {
   if (!items.length) return `<div class="empty">No leave requests found.</div>`;
   return `
@@ -1076,7 +1177,10 @@ function renderLeaveTable(items, approvalsMode) {
                 ${excludedDatesText(item)}
               </td>
               <td data-label="Deducted Days">${item.days}</td>
-              <td data-label="Type">${escapeHtml(item.type)}</td>
+              <td data-label="Type">
+                ${escapeHtml(item.type)}
+                ${renderMedicalCertificateLink(item)}
+              </td>
               <td data-label="Status">${statusPill(item.status)}</td>
               <td data-label="${approvalsMode ? "Decision" : "Approver"}">
                 ${approvalsMode ? renderDecisionControls("leave", item) : escapeHtml(employeeName(item.managerId))}
@@ -1173,13 +1277,16 @@ function managerOptions(choices, selectedId, currentId = "") {
 
 function employeeSearchText(employee) {
   const manager = employee.managerId ? employeeName(employee.managerId) : "unassigned";
+  const claimApprover = employee.claimApproverId ? employeeName(employee.claimApproverId) : "unassigned";
   return [
     employee.name,
     employee.email,
     roleName(employee.role),
     manager,
+    claimApprover,
     `service ${employee.serviceStartDate}`,
     `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement} birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
+    `medical leave ${employee.medicalLeaveEntitlement ?? 14}`,
     `medical ${employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
   ].join(" ").toLowerCase();
@@ -1232,7 +1339,7 @@ function renderLeaveAdjustmentHistory() {
 function renderEmployees() {
   const managerChoices = employeeManagerChoices();
   renderShell(`
-    ${renderTopbar("Employees", "Administer employees, roles, direct reports, and leave entitlement.")}
+    ${renderTopbar("Employees", "Administer employees, roles, direct reports, claims approvers, and leave entitlement.")}
     <div class="content-grid">
       <section class="section">
         <div class="section-header">
@@ -1259,6 +1366,10 @@ function renderEmployees() {
             <div class="field">
               <label for="employee-manager">Direct Report / Approver</label>
               <select id="employee-manager" name="managerId">${managerOptions(managerChoices, "")}</select>
+            </div>
+            <div class="field">
+              <label for="employee-claim-approver">Claims Approver</label>
+              <select id="employee-claim-approver" name="claimApproverId">${managerOptions(managerChoices, "")}</select>
             </div>
             <div class="field">
               <label for="employee-service-start">Service Start</label>
@@ -1288,7 +1399,7 @@ function renderEmployees() {
           <div class="directory-tools">
             <label class="search-field" for="employee-search">
               <span>Search</span>
-              <input id="employee-search" data-action="employee-search" type="search" placeholder="Name, email, role, or direct report">
+              <input id="employee-search" data-action="employee-search" type="search" placeholder="Name, email, role, or approver">
             </label>
             <button class="button primary" data-action="save-all-employees">Save All</button>
           </div>
@@ -1316,6 +1427,10 @@ function renderEmployees() {
               <div class="field">
                 <label>Direct Report</label>
                 <select data-field="managerId">${managerOptions(managerChoices, employee.managerId, employee.id)}</select>
+              </div>
+              <div class="field">
+                <label>Claims Approver</label>
+                <select data-field="claimApproverId">${managerOptions(managerChoices, employee.claimApproverId || employee.managerId, employee.id)}</select>
               </div>
               <div class="field">
                 <label>Service Start</label>
@@ -1565,6 +1680,19 @@ function formObject(form) {
   return Object.fromEntries(new FormData(form).entries());
 }
 
+function updateMedicalCertificateField(form) {
+  const typeField = form.querySelector("select[name='type']");
+  const wrapper = form.querySelector("[data-medical-certificate-field]");
+  const fileInput = form.querySelector("input[name='medicalCertificate']");
+  if (!typeField || !wrapper || !fileInput) return;
+
+  const required = isMedicalLeaveType(typeField.value);
+  wrapper.hidden = !required;
+  fileInput.required = required;
+  fileInput.disabled = !required;
+  if (!required) fileInput.value = "";
+}
+
 async function refreshDashboard() {
   const data = await api("/api/dashboard");
   updateDashboard(data);
@@ -1594,11 +1722,13 @@ document.addEventListener("submit", async (event) => {
       showToast("Signed in.");
     }
     if (formType === "leave") {
+      const leavePayload = await leaveFormPayload(form, body);
       const data = await api("/api/leave-requests", {
         method: "POST",
-        body: JSON.stringify(body)
+        body: leavePayload.body
       });
       form.reset();
+      updateMedicalCertificateField(form);
       updateDashboard(data);
       showToast("Leave application submitted.");
     }
@@ -1842,6 +1972,12 @@ function updateHistoryFilter(field) {
 }
 
 document.addEventListener("change", (event) => {
+  const leaveType = event.target.closest("form[data-form='leave'] select[name='type']");
+  if (leaveType) {
+    updateMedicalCertificateField(leaveType.form);
+    return;
+  }
+
   const field = event.target.closest("[data-history-kind]");
   if (!field || field.dataset.historyField === "query") return;
   updateHistoryFilter(field);

@@ -8,6 +8,7 @@ const {
   assertDecision,
   assertIsoDate,
   ANNUAL_BIRTHDAY_LEAVE_DAYS,
+  ANNUAL_MEDICAL_LEAVE_DAYS,
   canAdmin,
   canReview,
   canSeeEmployee,
@@ -15,9 +16,11 @@ const {
   decisionLabel,
   formatIsoDate,
   generalClaimSummary,
+  isMedicalLeaveType,
   leaveDayBreakdown,
   leaveSummary,
   medicalClaimSummary,
+  medicalLeaveSummary,
   nextLeaveYearBalance,
   normalizeLeaveDays,
   normalizeSignedLeaveDays,
@@ -421,6 +424,7 @@ function normalizeDb(db) {
     leaveRequests: Array.isArray(db.leaveRequests)
       ? db.leaveRequests.map((request) => ({
           ...request,
+          medicalCertificate: request.medicalCertificate || null,
           excludedDates: Array.isArray(request.excludedDates) ? request.excludedDates : []
         }))
       : [],
@@ -482,7 +486,12 @@ function normalizeUser(user) {
     birthdayLeaveEntitlement: normalizeLeaveDays(user.birthdayLeaveEntitlement ?? 0, "Birthday leave"),
     leavePolicyYear: Number(user.leavePolicyYear || thisYear),
     leaveEntitlement: Number(user.leaveEntitlement || 0),
-    medicalClaimLimit: Number(user.medicalClaimLimit ?? 500)
+    medicalClaimLimit: Number(user.medicalClaimLimit ?? 500),
+    medicalLeaveEntitlement: normalizeLeaveDays(
+      user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
+      "Medical leave entitlement"
+    ),
+    claimApproverId: user.claimApproverId ?? user.claimManagerId ?? user.claimApprover ?? user.managerId ?? null
   };
   if (user.annualLeaveEntitlement === undefined || user.annualLeaveEntitlement === null) {
     normalized.annualLeaveEntitlement = startingLeaveEntitlement;
@@ -643,6 +652,7 @@ function seedProductionDb() {
     email: String(process.env.INITIAL_ADMIN_EMAIL || "admin@cls.local").trim().toLowerCase(),
     role: "admin",
     managerId: null,
+    claimApproverId: null,
     leaveEntitlement: 0,
     startingLeaveEntitlement: 0,
     annualLeaveEntitlement: 0,
@@ -651,6 +661,7 @@ function seedProductionDb() {
     leavePolicyYear: currentLeaveYear(),
     serviceStartDate: formatIsoDate(new Date()),
     medicalClaimLimit: 0,
+    medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
     active: true,
     createdAt,
     updatedAt: createdAt,
@@ -701,6 +712,7 @@ function seedDb() {
       email: "admin@cls.local",
       role: "admin",
       managerId: null,
+      claimApproverId: null,
       leaveEntitlement: 0,
       startingLeaveEntitlement: 0,
       annualLeaveEntitlement: 0,
@@ -709,6 +721,7 @@ function seedDb() {
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2026-01-01",
       medicalClaimLimit: 0,
+      medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
       active: true,
       createdAt,
       updatedAt: createdAt,
@@ -720,6 +733,7 @@ function seedDb() {
       email: "manager@cls.local",
       role: "manager",
       managerId: adminId,
+      claimApproverId: adminId,
       leaveEntitlement: 18,
       startingLeaveEntitlement: 18,
       annualLeaveEntitlement: 18,
@@ -728,6 +742,7 @@ function seedDb() {
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2020-01-01",
       medicalClaimLimit: 500,
+      medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
       active: true,
       createdAt,
       updatedAt: createdAt,
@@ -739,6 +754,7 @@ function seedDb() {
       email: "employee@cls.local",
       role: "employee",
       managerId,
+      claimApproverId: managerId,
       leaveEntitlement: 16,
       startingLeaveEntitlement: 16,
       annualLeaveEntitlement: 16,
@@ -747,6 +763,7 @@ function seedDb() {
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2024-01-01",
       medicalClaimLimit: 500,
+      medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
       active: true,
       createdAt,
       updatedAt: createdAt,
@@ -758,6 +775,7 @@ function seedDb() {
       email: "priya@cls.local",
       role: "employee",
       managerId,
+      claimApproverId: managerId,
       leaveEntitlement: 15,
       startingLeaveEntitlement: 15,
       annualLeaveEntitlement: 15,
@@ -766,6 +784,7 @@ function seedDb() {
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2025-01-01",
       medicalClaimLimit: 500,
+      medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
       active: true,
       createdAt,
       updatedAt: createdAt,
@@ -1265,6 +1284,43 @@ async function createReceiptUploadUrl(user, body) {
   };
 }
 
+async function createMedicalCertificateUploadUrl(user, body) {
+  if (!isSupabaseEnabled()) {
+    return { direct: false };
+  }
+
+  const metadata = receiptUploadMetadata(body);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(metadata.extension) === metadata.mimeType
+    ? metadata.extension
+    : RECEIPT_MIME_EXTENSIONS.get(metadata.mimeType) || metadata.extension || ".receipt";
+  const storedName = `medical-certificates/${user.id}/${id("mc")}${extension}`;
+  const uploadEndpoint = storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName, "object/upload/sign");
+  const response = await supabaseRequest(uploadEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: 600 })
+  });
+  const payload = await response.json();
+  const uploadData = payload.data || payload;
+  const signedUrl = resolveSupabaseSignedUrl(
+    uploadData.signedURL || uploadData.signedUrl || uploadData.url,
+    uploadData.token,
+    uploadEndpoint
+  );
+
+  return {
+    direct: true,
+    storage: "supabase",
+    bucket: SUPABASE_RECEIPT_BUCKET,
+    originalName: metadata.originalName,
+    mimeType: metadata.mimeType,
+    size: metadata.size,
+    storedName,
+    signedUrl,
+    method: "PUT"
+  };
+}
+
 async function receiptFromSupabaseUpload(user, upload) {
   if (!upload || typeof upload !== "object") {
     throw new Error("Receipt upload details are required.");
@@ -1279,6 +1335,38 @@ async function receiptFromSupabaseUpload(user, upload) {
   const bucket = String(upload.bucket || SUPABASE_RECEIPT_BUCKET);
   if (bucket !== SUPABASE_RECEIPT_BUCKET) {
     throw new Error("Receipt upload bucket is invalid.");
+  }
+
+  const originalName = safeReceiptName(upload.originalName);
+  const response = await supabaseRequest(storageObjectEndpoint(bucket, storedName));
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const parsed = parseReceipt({ name: originalName, buffer });
+
+  return {
+    storage: "supabase",
+    bucket,
+    originalName: parsed.originalName,
+    mimeType: parsed.mimeType,
+    size: parsed.buffer.length,
+    storedName,
+    uploadedAt: nowIso()
+  };
+}
+
+async function medicalCertificateFromSupabaseUpload(user, upload) {
+  if (!upload || typeof upload !== "object") {
+    throw new Error("Medical certificate upload details are required.");
+  }
+
+  const storedName = String(upload.storedName || "");
+  const expectedPrefix = `medical-certificates/${user.id}/`;
+  if (!storedName.startsWith(expectedPrefix)) {
+    throw new Error("Medical certificate upload path is invalid.");
+  }
+
+  const bucket = String(upload.bucket || SUPABASE_RECEIPT_BUCKET);
+  if (bucket !== SUPABASE_RECEIPT_BUCKET) {
+    throw new Error("Medical certificate upload bucket is invalid.");
   }
 
   const originalName = safeReceiptName(upload.originalName);
@@ -1344,6 +1432,53 @@ async function saveReceiptAttachment(claimId, receipt) {
   };
 }
 
+async function saveMedicalCertificateAttachment(requestId, certificate) {
+  const parsed = parseReceipt(certificate);
+  const originalExtension = receiptExtension(parsed.originalName);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(originalExtension) === parsed.mimeType
+    ? originalExtension
+    : RECEIPT_MIME_EXTENSIONS.get(parsed.mimeType);
+  const storedName = isSupabaseEnabled()
+    ? `medical-certificates/${requestId}${extension || ".receipt"}`
+    : `medical-certificate-${requestId}${extension || ".receipt"}`;
+
+  if (isSupabaseEnabled()) {
+    await supabaseRequest(
+      storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": parsed.mimeType,
+          "x-upsert": "true"
+        },
+        body: parsed.buffer
+      }
+    );
+
+    return {
+      storage: "supabase",
+      bucket: SUPABASE_RECEIPT_BUCKET,
+      originalName: parsed.originalName,
+      mimeType: parsed.mimeType,
+      size: parsed.buffer.length,
+      storedName,
+      uploadedAt: nowIso()
+    };
+  }
+
+  await fs.mkdir(UPLOAD_DIR, { recursive: true });
+  await fs.writeFile(safeLocalReceiptPath(storedName), parsed.buffer);
+
+  return {
+    storage: "local",
+    originalName: parsed.originalName,
+    mimeType: parsed.mimeType,
+    size: parsed.buffer.length,
+    storedName,
+    uploadedAt: nowIso()
+  };
+}
+
 async function readReceiptAttachment(claim) {
   if (claim.receipt?.deletedAt) {
     const error = new Error("Receipt has been removed under the 5-year retention policy.");
@@ -1359,6 +1494,20 @@ async function readReceiptAttachment(claim) {
   }
 
   return fs.readFile(safeLocalReceiptPath(claim.receipt.storedName));
+}
+
+async function readMedicalCertificateAttachment(request) {
+  if (request.medicalCertificate?.storage === "supabase") {
+    const storedName = String(request.medicalCertificate.storedName || "");
+    const response = await supabaseRequest(storageObjectEndpoint(
+      request.medicalCertificate.bucket || SUPABASE_RECEIPT_BUCKET,
+      storedName
+    ));
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  return fs.readFile(safeLocalReceiptPath(request.medicalCertificate.storedName));
 }
 
 async function deleteReceiptAttachment(receipt) {
@@ -1546,6 +1695,7 @@ function employeeChangeSet(db, before, after) {
     { key: "annualLeaveEntitlement", label: "annual leave days" },
     { key: "leaveEntitlement", label: "total leave entitlement" },
     { key: "birthdayLeaveEntitlement", label: "birthday leave" },
+    { key: "medicalLeaveEntitlement", label: "medical leave entitlement" },
     { key: "medicalClaimLimit", label: "medical claim limit" },
     { key: "active", label: "active status" }
   ];
@@ -1564,6 +1714,15 @@ function employeeChangeSet(db, before, after) {
       label: "direct report",
       from: auditUserName(db, before.managerId),
       to: auditUserName(db, after.managerId)
+    });
+  }
+
+  if (auditValue(before.claimApproverId) !== auditValue(after.claimApproverId)) {
+    changes.push({
+      field: "claimApproverId",
+      label: "claims approver",
+      from: auditUserName(db, before.claimApproverId),
+      to: auditUserName(db, after.claimApproverId)
     });
   }
 
@@ -1780,6 +1939,7 @@ function dashboard(db, user) {
       adjustments: currentLeaveAdjustments,
       birthdayLeave: user.birthdayLeaveEntitlement
     }),
+    medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
@@ -1806,6 +1966,7 @@ async function createEmployee(db, body) {
   const email = String(body.email || "").trim().toLowerCase();
   const role = String(body.role || "employee");
   const managerId = body.managerId || null;
+  const claimApproverId = body.claimApproverId || managerId || null;
   const serviceStartDate = String(body.serviceStartDate || formatIsoDate(new Date()));
   assertIsoDate(serviceStartDate, "Service start date");
   const initialAnnualLeaveDays = normalizeLeaveDays(
@@ -1824,6 +1985,9 @@ async function createEmployee(db, body) {
   if (managerId && !getUser(db, managerId)) {
     throw new Error("Direct report approver was not found.");
   }
+  if (claimApproverId && !getUser(db, claimApproverId)) {
+    throw new Error("Claims approver was not found.");
+  }
   if (!Number.isFinite(medicalClaimLimit) || medicalClaimLimit < 0) {
     throw new Error("Medical claim limit must be 0 or more.");
   }
@@ -1838,6 +2002,7 @@ async function createEmployee(db, body) {
     email,
     role,
     managerId,
+    claimApproverId,
     serviceStartDate,
     startingLeaveEntitlement: initialAnnualLeaveDays,
     annualLeaveEntitlement,
@@ -1847,6 +2012,7 @@ async function createEmployee(db, body) {
     leaveEntitlement: normalizeLeaveDays(annualLeaveEntitlement + birthdayLeaveEntitlement, "Leave entitlement"),
     leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
+    medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
     active: true,
     createdAt,
     updatedAt: createdAt,
@@ -1892,6 +2058,12 @@ function updateEmployee(db, employeeId, body) {
     if (managerId && !getUser(db, managerId)) throw new Error("Direct report approver was not found.");
     employee.managerId = managerId;
   }
+  if (body.claimApproverId !== undefined) {
+    const claimApproverId = body.claimApproverId || null;
+    if (claimApproverId === employee.id) throw new Error("An employee cannot approve their own claims.");
+    if (claimApproverId && !getUser(db, claimApproverId)) throw new Error("Claims approver was not found.");
+    employee.claimApproverId = claimApproverId;
+  }
   if (body.serviceStartDate !== undefined) {
     assertIsoDate(String(body.serviceStartDate), "Service start date");
     employee.serviceStartDate = String(body.serviceStartDate);
@@ -1920,6 +2092,12 @@ function updateEmployee(db, employeeId, body) {
     const limit = Number(body.medicalClaimLimit);
     if (!Number.isFinite(limit) || limit < 0) throw new Error("Medical claim limit must be 0 or more.");
     employee.medicalClaimLimit = limit;
+  }
+  if (body.medicalLeaveEntitlement !== undefined) {
+    employee.medicalLeaveEntitlement = normalizeLeaveDays(
+      body.medicalLeaveEntitlement,
+      "Medical leave entitlement"
+    );
   }
   if (body.active !== undefined) {
     employee.active = Boolean(body.active);
@@ -2039,6 +2217,7 @@ async function createLeaveRequest(db, user, body) {
   }
 
   const type = String(body.type || "Annual Leave").trim();
+  const isMedicalLeave = isMedicalLeaveType(type);
   const reason = String(body.reason || "").trim();
   const startDate = String(body.startDate || "");
   const endDate = String(body.endDate || "");
@@ -2050,13 +2229,23 @@ async function createLeaveRequest(db, user, body) {
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
   const days = breakdown.days;
   const leaveYear = Number(startDate.slice(0, 4));
-  const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
 
   if (days <= 0) {
     throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
   }
-  if (days > summary.available) {
-    throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
+  if (isMedicalLeave) {
+    const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
+    if (days > summary.unreserved) {
+      throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
+    }
+    if (!body.medicalCertificateUpload && !body.medicalCertificate) {
+      throw new Error("A Medical Certificate attachment is required for Medical Leave.");
+    }
+  } else {
+    const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
+    if (days > summary.available) {
+      throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
+    }
   }
 
   const createdAt = nowIso();
@@ -2071,6 +2260,7 @@ async function createLeaveRequest(db, user, body) {
     leaveYear,
     excludedDates: breakdown.excludedDates,
     reason,
+    medicalCertificate: null,
     status: "pending",
     decisionNote: "",
     createdAt,
@@ -2079,6 +2269,12 @@ async function createLeaveRequest(db, user, body) {
     decidedBy: null
   };
 
+  if (isMedicalLeave) {
+    request.medicalCertificate = body.medicalCertificateUpload
+      ? await medicalCertificateFromSupabaseUpload(user, body.medicalCertificateUpload)
+      : await saveMedicalCertificateAttachment(request.id, body.medicalCertificate);
+  }
+
   db.leaveRequests.unshift(request);
   await addEmail(db, {
     recipientId: user.managerId,
@@ -2086,9 +2282,10 @@ async function createLeaveRequest(db, user, body) {
     subject: `Leave request pending approval: ${user.name}`,
     body: [
       `${user.name} has applied for ${days} deductible working day(s) of ${type} from ${startDate} to ${endDate}.`,
+      isMedicalLeave ? "A Medical Certificate has been uploaded in CLS Leave & Claims for your review." : "",
       "Please review the leave request in CLS Leave & Claims.",
       `Use the attached calendar file (${user.name} on leave) to add this leave period to your calendar.`
-    ].join("\n\n"),
+    ].filter(Boolean).join("\n\n"),
     relatedId: request.id
   }, {
     attachments: [
@@ -2233,8 +2430,9 @@ async function cancelLeaveRequest(db, user, requestId, body = {}) {
 }
 
 async function createClaim(db, user, body) {
-  if (!user.managerId) {
-    throw new Error("No Direct Report / approver has been assigned to your profile yet.");
+  const claimApproverId = user.claimApproverId || user.managerId;
+  if (!claimApproverId) {
+    throw new Error("No claims approver has been assigned to your profile yet.");
   }
 
   const clientSubmissionId = String(body.clientSubmissionId || "").trim().slice(0, 120);
@@ -2267,7 +2465,7 @@ async function createClaim(db, user, body) {
   const claim = {
     id: id("claim"),
     employeeId: user.id,
-    managerId: user.managerId,
+    managerId: claimApproverId,
     claimType,
     claimDate,
     category,
@@ -2292,7 +2490,7 @@ async function createClaim(db, user, body) {
   db.medicalClaims.unshift(claim);
   const label = claimType === "medical" ? "Medical claim" : "General claim";
   await addEmail(db, {
-    recipientId: user.managerId,
+    recipientId: claimApproverId,
     type: "claim_submitted",
     subject: `${label} pending approval: ${user.name}`,
     body: `${user.name} has submitted a ${label.toLowerCase()} for $${amount.toFixed(2)} from ${provider}.`,
@@ -2528,6 +2726,10 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: await createReceiptUploadUrl(user, body) });
   }
 
+  if (req.method === "POST" && pathname === "/api/leave-medical-certificates/upload-url") {
+    return jsonResponse(res, 200, { data: await createMedicalCertificateUploadUrl(user, body) });
+  }
+
   if (req.method === "POST" && pathname === "/api/leave-adjustments") {
     requireAdmin(user);
     const adjustment = createLeaveAdjustment(db, user, body);
@@ -2547,7 +2749,9 @@ async function handleApi(req, res, pathname) {
       metadata: {
         role: employee.role,
         manager: auditUserName(db, employee.managerId),
+        claimApprover: auditUserName(db, employee.claimApproverId),
         annualLeaveEntitlement: employee.annualLeaveEntitlement,
+        medicalLeaveEntitlement: employee.medicalLeaveEntitlement,
         medicalClaimLimit: employee.medicalClaimLimit
       }
     });
@@ -2606,10 +2810,12 @@ async function handleApi(req, res, pathname) {
       relatedId: request.id,
       summary: `${user.name} submitted ${request.type} from ${request.startDate} to ${request.endDate} (${request.days} working day${request.days === 1 ? "" : "s"}).`,
       metadata: {
+        type: request.type,
         startDate: request.startDate,
         endDate: request.endDate,
         days: request.days,
-        excludedDates: request.excludedDates
+        excludedDates: request.excludedDates,
+        hasMedicalCertificate: Boolean(request.medicalCertificate)
       }
     });
     await saveDb(db);
@@ -2676,6 +2882,26 @@ async function handleApi(req, res, pathname) {
       "Content-Length": receipt.length
     });
     return res.end(receipt);
+  }
+
+  const medicalCertificateMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/medical-certificate$/);
+  if (medicalCertificateMatch && req.method === "GET") {
+    const request = db.leaveRequests.find((item) => item.id === medicalCertificateMatch[1]);
+    if (!request) return jsonResponse(res, 404, { error: "Leave request was not found." });
+    if (!canReview(user, request) && request.employeeId !== user.id) {
+      return jsonResponse(res, 403, { error: "You cannot view this Medical Certificate." });
+    }
+    if (!request.medicalCertificate?.storedName) {
+      return jsonResponse(res, 404, { error: "No Medical Certificate is attached to this leave request." });
+    }
+
+    const certificate = await readMedicalCertificateAttachment(request);
+    res.writeHead(200, {
+      "Content-Type": request.medicalCertificate.mimeType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${request.medicalCertificate.originalName || "medical-certificate"}"`,
+      "Content-Length": certificate.length
+    });
+    return res.end(certificate);
   }
 
   if (req.method === "POST" && (pathname === "/api/medical-claims" || pathname === "/api/claims")) {
@@ -2788,6 +3014,7 @@ module.exports = {
     applyLeaveYearRollover,
     auditPage,
     cancelLeaveRequest,
+    createClaim,
     createLeaveAdjustment,
     multipartBoundary,
     parseMultipartBuffer,

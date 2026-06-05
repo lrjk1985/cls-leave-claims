@@ -1,6 +1,7 @@
 const VALID_DECISIONS = new Set(["approved", "rejected"]);
 const MAX_ANNUAL_LEAVE_DAYS = 18;
 const ANNUAL_BIRTHDAY_LEAVE_DAYS = 1;
+const ANNUAL_MEDICAL_LEAVE_DAYS = 14;
 
 function assertIsoDate(value, fieldName) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -163,6 +164,10 @@ function leaveRequestYear(request) {
   return Number(request.leaveYear || yearFromIsoDate(request.startDate, "Leave start date"));
 }
 
+function isMedicalLeaveType(type) {
+  return String(type || "").trim().toLowerCase() === "medical leave";
+}
+
 function leaveSummary(user, leaveRequests, options = {}) {
   const year = Number(options.year || user.leavePolicyYear || currentLeaveYear());
   const adjustments = normalizeSignedLeaveDays(options.adjustments ?? 0, "Leave adjustments");
@@ -175,7 +180,10 @@ function leaveSummary(user, leaveRequests, options = {}) {
     "Leave entitlement"
   );
   const ownRequests = leaveRequests.filter(
-    (request) => request.employeeId === user.id && leaveRequestYear(request) === year
+    (request) =>
+      request.employeeId === user.id &&
+      leaveRequestYear(request) === year &&
+      !isMedicalLeaveType(request.type)
   );
   const approved = ownRequests
     .filter((request) => request.status === "approved")
@@ -193,6 +201,38 @@ function leaveSummary(user, leaveRequests, options = {}) {
     approved: normalizeLeaveDays(approved, "Approved leave"),
     pending: normalizeLeaveDays(pending, "Pending leave"),
     available: normalizeLeaveDays(Math.max(0, entitlement - approved), "Available leave")
+  };
+}
+
+function medicalLeaveSummary(user, leaveRequests, options = {}) {
+  const year = Number(options.year || user.leavePolicyYear || currentLeaveYear());
+  const entitlement = normalizeLeaveDays(
+    options.entitlementOverride ?? user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
+    "Medical leave entitlement"
+  );
+  const ownRequests = leaveRequests.filter(
+    (request) =>
+      request.employeeId === user.id &&
+      leaveRequestYear(request) === year &&
+      isMedicalLeaveType(request.type)
+  );
+  const approved = ownRequests
+    .filter((request) => request.status === "approved")
+    .reduce((total, request) => total + Number(request.days || 0), 0);
+  const pending = ownRequests
+    .filter((request) => request.status === "pending")
+    .reduce((total, request) => total + Number(request.days || 0), 0);
+
+  return {
+    year,
+    entitlement,
+    approved: normalizeLeaveDays(approved, "Approved medical leave"),
+    pending: normalizeLeaveDays(pending, "Pending medical leave"),
+    available: normalizeLeaveDays(Math.max(0, entitlement - approved), "Available medical leave"),
+    unreserved: normalizeLeaveDays(
+      Math.max(0, entitlement - approved - pending),
+      "Unreserved medical leave"
+    )
   };
 }
 
@@ -282,6 +322,7 @@ module.exports = {
   assertDecision,
   assertIsoDate,
   ANNUAL_BIRTHDAY_LEAVE_DAYS,
+  ANNUAL_MEDICAL_LEAVE_DAYS,
   canAdmin,
   canReview,
   canSeeEmployee,
@@ -290,11 +331,13 @@ module.exports = {
   decisionLabel,
   formatIsoDate,
   generalClaimSummary,
+  isMedicalLeaveType,
   leaveDayBreakdown,
   leaveRequestYear,
   leaveSummary,
   MAX_ANNUAL_LEAVE_DAYS,
   medicalClaimSummary,
+  medicalLeaveSummary,
   nextLeaveYearBalance,
   normalizeLeaveDays,
   normalizeSignedLeaveDays,

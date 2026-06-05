@@ -7,6 +7,7 @@ const {
   leaveDayBreakdown,
   leaveSummary,
   medicalClaimSummary,
+  medicalLeaveSummary,
   nextLeaveYearBalance,
   normalizeMoney,
   serviceAdjustedAnnualLeave,
@@ -51,6 +52,7 @@ test("leaveSummary separates approved and pending leave days", () => {
   const summary = leaveSummary(user, [
     { employeeId: "u1", leaveYear: 2026, status: "approved", days: 3 },
     { employeeId: "u1", leaveYear: 2026, status: "pending", days: 2 },
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "approved", days: 4 },
     { employeeId: "u1", leaveYear: 2026, status: "cancelled", days: 5 },
     { employeeId: "u1", leaveYear: 2025, status: "approved", days: 9 },
     { employeeId: "u2", leaveYear: 2026, status: "approved", days: 9 }
@@ -66,6 +68,30 @@ test("leaveSummary separates approved and pending leave days", () => {
     approved: 3,
     pending: 2,
     available: 11
+  });
+});
+
+test("medicalLeaveSummary tracks medical leave separately from annual leave", () => {
+  const user = {
+    id: "u1",
+    medicalLeaveEntitlement: 14,
+    leavePolicyYear: 2026
+  };
+  const summary = medicalLeaveSummary(user, [
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "approved", days: 3 },
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "pending", days: 1.5 },
+    { employeeId: "u1", leaveYear: 2026, type: "Annual Leave", status: "approved", days: 8 },
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "cancelled", days: 2 },
+    { employeeId: "u2", leaveYear: 2026, type: "Medical Leave", status: "approved", days: 7 }
+  ]);
+
+  assert.deepEqual(summary, {
+    year: 2026,
+    entitlement: 14,
+    approved: 3,
+    pending: 1.5,
+    available: 11,
+    unreserved: 9.5
   });
 });
 

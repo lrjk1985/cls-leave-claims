@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const path = require("node:path");
 const { __test } = require("../server");
 
 test("parseMultipartBuffer keeps receipt uploads binary", () => {
@@ -413,4 +415,55 @@ test("createLeaveAdjustment prevents deductions below available leave", () => {
     }),
     /available leave below 0/
   );
+});
+
+test("createClaim routes claims to the separate claims approver", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_leave_manager",
+    claimApproverId: "usr_claim_manager",
+    medicalClaimLimit: 500
+  };
+  const db = {
+    users: [
+      employee,
+      {
+        id: "usr_leave_manager",
+        name: "Leave Manager",
+        email: "leave.manager@cls.local",
+        role: "manager"
+      },
+      {
+        id: "usr_claim_manager",
+        name: "Claims Manager",
+        email: "claims.manager@cls.local",
+        role: "manager"
+      }
+    ],
+    medicalClaims: [],
+    emails: []
+  };
+
+  const claim = await __test.createClaim(db, employee, {
+    category: "Others",
+    claimDate: "2026-06-04",
+    provider: "Office supplier",
+    amount: "45.20",
+    description: "Stationery",
+    receipt: {
+      name: "claim.pdf",
+      buffer: Buffer.from("%PDF-1.4\nclaim receipt\n", "utf8")
+    }
+  });
+
+  assert.equal(claim.managerId, "usr_claim_manager");
+  assert.equal(db.emails[0].recipientId, "usr_claim_manager");
+  assert.equal(db.emails[0].to, "claims.manager@cls.local");
+
+  await fs.rm(path.join(__dirname, "..", "data", "uploads", claim.receipt.storedName), {
+    force: true
+  });
 });
