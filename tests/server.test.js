@@ -467,3 +467,125 @@ test("createClaim routes claims to the separate claims approver", async () => {
     force: true
   });
 });
+
+test("Supabase table mappings round-trip core app records", () => {
+  const byField = Object.fromEntries(__test.supabaseTableConfigs.map((config) => [config.field, config]));
+  const records = {
+    users: {
+      id: "usr_employee",
+      name: "Employee",
+      email: "employee@cls.local",
+      role: "employee",
+      managerId: "usr_manager",
+      claimApproverId: "usr_claim_manager",
+      serviceStartDate: "2026-01-01",
+      startingLeaveEntitlement: 14,
+      annualLeaveEntitlement: 14,
+      carriedForwardLeave: 1,
+      birthdayLeaveEntitlement: 1,
+      leavePolicyYear: 2026,
+      leaveEntitlement: 16,
+      leaveRolloverAt: "2026-01-01T00:00:00.000Z",
+      leaveServiceAccrualAt: "2026-01-01T00:00:00.000Z",
+      medicalClaimLimit: 500,
+      medicalLeaveEntitlement: 14,
+      active: true,
+      passwordSalt: "salt",
+      passwordHash: "hash",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z"
+    },
+    leaveRequests: {
+      id: "leave_1",
+      employeeId: "usr_employee",
+      managerId: "usr_manager",
+      type: "Medical Leave",
+      startDate: "2026-06-04",
+      endDate: "2026-06-04",
+      days: 1,
+      leaveYear: 2026,
+      excludedDates: [{ date: "2026-06-05", reason: "Public Holiday" }],
+      reason: "Sick",
+      medicalCertificate: { originalName: "mc.pdf", storedName: "medical-certificates/mc.pdf" },
+      status: "pending",
+      decisionNote: "",
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+      decidedAt: null,
+      decidedBy: null,
+      cancellationNote: "",
+      cancelledAt: null,
+      cancelledBy: null
+    },
+    leaveAdjustments: {
+      id: "adjust_1",
+      employeeId: "usr_employee",
+      actorId: "usr_admin",
+      year: 2026,
+      days: 0.5,
+      reason: "Correction",
+      createdAt: "2026-06-04T00:00:00.000Z"
+    },
+    medicalClaims: {
+      id: "claim_1",
+      employeeId: "usr_employee",
+      managerId: "usr_claim_manager",
+      claimType: "general",
+      claimDate: "2026-06-04",
+      category: "Others",
+      provider: "Vendor",
+      amount: 42.25,
+      receiptRef: "",
+      receipt: { originalName: "receipt.pdf", storedName: "claims/receipt.pdf" },
+      clientSubmissionId: "submission-1",
+      description: "Team supplies",
+      status: "approved",
+      decisionNote: "OK",
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+      decidedAt: "2026-06-05T00:00:00.000Z",
+      decidedBy: "usr_claim_manager"
+    },
+    emails: {
+      id: "email_1",
+      recipientId: "usr_employee",
+      to: "employee@cls.local",
+      subject: "Subject",
+      body: "Body",
+      type: "claim_decided",
+      relatedId: "claim_1",
+      createdAt: "2026-06-04T00:00:00.000Z",
+      delivered: true,
+      deliveredAt: "2026-06-04T00:01:00.000Z",
+      deliveryError: null,
+      providerId: "resend_1"
+    },
+    auditEvents: {
+      id: "audit_1",
+      createdAt: "2026-06-04T00:00:00.000Z",
+      actorId: "usr_admin",
+      actorName: "Admin",
+      actorEmail: "admin@cls.local",
+      actorRole: "admin",
+      action: "claim.approved",
+      summary: "Approved claim.",
+      affectedUserId: "usr_employee",
+      affectedUserName: "Employee",
+      relatedType: "claim",
+      relatedId: "claim_1",
+      metadata: { amount: 42.25 }
+    },
+    sessions: {
+      token: "token",
+      userId: "usr_employee",
+      expiresAt: 1770000000000,
+      createdAt: "2026-06-04T00:00:00.000Z"
+    }
+  };
+
+  for (const [field, record] of Object.entries(records)) {
+    const config = byField[field];
+    assert.ok(config, `Missing mapping for ${field}`);
+    assert.deepEqual(config.fromRow(config.toRow(record)), record);
+  }
+});

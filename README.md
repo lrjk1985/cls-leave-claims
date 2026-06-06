@@ -35,7 +35,7 @@ Seeded local accounts:
 - Medical claim balance shown after login, with admin-set medical claim limits
 - General claims have no claim limit
 - Admin employee management, role assignment, direct report assignment, initial annual leave days, and medical claim limit setup
-- Supabase V1 rollout migration in `supabase/v1-rollout.sql`
+- Supabase V1 rollout migration in `supabase/v1-rollout.sql` with dedicated production tables
 - Vercel serverless adapter and daily maintenance cron in `vercel.json`
 - Resend-ready production email delivery with `.ics` leave calendar attachments
 - Vercel and Supabase rollout notes in `docs/PRODUCTION_ROLLOUT.md`

@@ -345,29 +345,401 @@ async function supabaseRequest(pathname, options = {}) {
   return response;
 }
 
-async function loadSupabaseDb() {
-  const response = await supabaseRequest(
-    `/rest/v1/cls_app_state?key=eq.${encodeURIComponent(SUPABASE_STATE_KEY)}&select=data`,
-    { headers: { Accept: "application/json" } }
-  );
-  const rows = await response.json();
-  if (Array.isArray(rows) && rows[0]?.data) {
-    const db = normalizeDb(rows[0].data);
-    const rollover = applyLeaveYearRollover(db);
-    const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
-    const sessionsPruned = pruneExpiredSessions(db);
-    if (rollover.changed || anniversaryAccrual.changed || sessionsPruned) await saveSupabaseDb(db);
-    return db;
-  }
+function nullish(value) {
+  return value === undefined ? null : value;
+}
 
-  const db = seedDb();
-  applyLeaveYearRollover(db);
-  applyServiceAnniversaryAccrual(db);
-  await saveSupabaseDb(db);
+function userToRow(user) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    manager_id: nullish(user.managerId),
+    claim_approver_id: nullish(user.claimApproverId),
+    service_start_date: user.serviceStartDate,
+    starting_leave_entitlement: Number(user.startingLeaveEntitlement || 0),
+    annual_leave_entitlement: Number(user.annualLeaveEntitlement || 0),
+    carried_forward_leave: Number(user.carriedForwardLeave || 0),
+    birthday_leave_entitlement: Number(user.birthdayLeaveEntitlement || 0),
+    leave_policy_year: Number(user.leavePolicyYear || currentLeaveYear()),
+    leave_entitlement: Number(user.leaveEntitlement || 0),
+    leave_rollover_at: nullish(user.leaveRolloverAt),
+    leave_service_accrual_at: nullish(user.leaveServiceAccrualAt),
+    medical_claim_limit: Number(user.medicalClaimLimit || 0),
+    medical_leave_entitlement: Number(user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
+    active: Boolean(user.active),
+    password_salt: user.passwordSalt,
+    password_hash: user.passwordHash,
+    created_at: user.createdAt,
+    updated_at: user.updatedAt
+  };
+}
+
+function userFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    role: row.role,
+    managerId: row.manager_id,
+    claimApproverId: row.claim_approver_id,
+    serviceStartDate: row.service_start_date,
+    startingLeaveEntitlement: Number(row.starting_leave_entitlement || 0),
+    annualLeaveEntitlement: Number(row.annual_leave_entitlement || 0),
+    carriedForwardLeave: Number(row.carried_forward_leave || 0),
+    birthdayLeaveEntitlement: Number(row.birthday_leave_entitlement || 0),
+    leavePolicyYear: Number(row.leave_policy_year || currentLeaveYear()),
+    leaveEntitlement: Number(row.leave_entitlement || 0),
+    leaveRolloverAt: row.leave_rollover_at,
+    leaveServiceAccrualAt: row.leave_service_accrual_at,
+    medicalClaimLimit: Number(row.medical_claim_limit || 0),
+    medicalLeaveEntitlement: Number(row.medical_leave_entitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
+    active: Boolean(row.active),
+    passwordSalt: row.password_salt,
+    passwordHash: row.password_hash,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function leaveRequestToRow(request) {
+  return {
+    id: request.id,
+    employee_id: request.employeeId,
+    manager_id: request.managerId,
+    type: request.type,
+    start_date: request.startDate,
+    end_date: request.endDate,
+    days: Number(request.days || 0),
+    leave_year: Number(request.leaveYear || currentLeaveYear()),
+    excluded_dates: Array.isArray(request.excludedDates) ? request.excludedDates : [],
+    reason: request.reason || "",
+    medical_certificate: request.medicalCertificate || null,
+    status: request.status,
+    decision_note: request.decisionNote || "",
+    created_at: request.createdAt,
+    updated_at: request.updatedAt,
+    decided_at: nullish(request.decidedAt),
+    decided_by: nullish(request.decidedBy),
+    cancellation_note: request.cancellationNote || "",
+    cancelled_at: nullish(request.cancelledAt),
+    cancelled_by: nullish(request.cancelledBy)
+  };
+}
+
+function leaveRequestFromRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    managerId: row.manager_id,
+    type: row.type,
+    startDate: row.start_date,
+    endDate: row.end_date,
+    days: Number(row.days || 0),
+    leaveYear: Number(row.leave_year || currentLeaveYear()),
+    excludedDates: Array.isArray(row.excluded_dates) ? row.excluded_dates : [],
+    reason: row.reason || "",
+    medicalCertificate: row.medical_certificate || null,
+    status: row.status,
+    decisionNote: row.decision_note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    decidedAt: row.decided_at,
+    decidedBy: row.decided_by,
+    cancellationNote: row.cancellation_note || "",
+    cancelledAt: row.cancelled_at,
+    cancelledBy: row.cancelled_by
+  };
+}
+
+function leaveAdjustmentToRow(adjustment) {
+  return {
+    id: adjustment.id,
+    employee_id: adjustment.employeeId,
+    actor_id: nullish(adjustment.actorId),
+    year: Number(adjustment.year || currentLeaveYear()),
+    days: Number(adjustment.days || 0),
+    reason: adjustment.reason || "",
+    created_at: adjustment.createdAt
+  };
+}
+
+function leaveAdjustmentFromRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    actorId: row.actor_id,
+    year: Number(row.year || currentLeaveYear()),
+    days: Number(row.days || 0),
+    reason: row.reason || "",
+    createdAt: row.created_at
+  };
+}
+
+function claimToRow(claim) {
+  return {
+    id: claim.id,
+    employee_id: claim.employeeId,
+    manager_id: claim.managerId,
+    claim_type: claim.claimType,
+    claim_date: claim.claimDate,
+    category: claim.category,
+    provider: claim.provider,
+    amount: Number(claim.amount || 0),
+    receipt_ref: claim.receiptRef || "",
+    receipt: claim.receipt || null,
+    client_submission_id: nullish(claim.clientSubmissionId),
+    description: claim.description,
+    status: claim.status,
+    decision_note: claim.decisionNote || "",
+    created_at: claim.createdAt,
+    updated_at: claim.updatedAt,
+    decided_at: nullish(claim.decidedAt),
+    decided_by: nullish(claim.decidedBy)
+  };
+}
+
+function claimFromRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    managerId: row.manager_id,
+    claimType: row.claim_type,
+    claimDate: row.claim_date,
+    category: row.category,
+    provider: row.provider,
+    amount: Number(row.amount || 0),
+    receiptRef: row.receipt_ref || "",
+    receipt: row.receipt || null,
+    clientSubmissionId: row.client_submission_id,
+    description: row.description,
+    status: row.status,
+    decisionNote: row.decision_note || "",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    decidedAt: row.decided_at,
+    decidedBy: row.decided_by
+  };
+}
+
+function emailToRow(email) {
+  return {
+    id: email.id,
+    recipient_id: email.recipientId,
+    to_address: email.to || "",
+    subject: email.subject,
+    body: email.body,
+    type: email.type,
+    related_id: nullish(email.relatedId),
+    created_at: email.createdAt,
+    delivered: Boolean(email.delivered),
+    delivered_at: nullish(email.deliveredAt),
+    delivery_error: nullish(email.deliveryError),
+    provider_id: nullish(email.providerId)
+  };
+}
+
+function emailFromRow(row) {
+  return {
+    id: row.id,
+    recipientId: row.recipient_id,
+    to: row.to_address || "",
+    subject: row.subject,
+    body: row.body,
+    type: row.type,
+    relatedId: row.related_id,
+    createdAt: row.created_at,
+    delivered: Boolean(row.delivered),
+    deliveredAt: row.delivered_at,
+    deliveryError: row.delivery_error,
+    providerId: row.provider_id
+  };
+}
+
+function auditEventToRow(event) {
+  return {
+    id: event.id,
+    created_at: event.createdAt,
+    actor_id: nullish(event.actorId),
+    actor_name: event.actorName || "System",
+    actor_email: event.actorEmail || "",
+    actor_role: event.actorRole || "system",
+    action: event.action,
+    summary: event.summary || "",
+    affected_user_id: nullish(event.affectedUserId),
+    affected_user_name: event.affectedUserName || "",
+    related_type: nullish(event.relatedType),
+    related_id: nullish(event.relatedId),
+    metadata: event.metadata && typeof event.metadata === "object" ? event.metadata : {}
+  };
+}
+
+function auditEventFromRow(row) {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    actorId: row.actor_id,
+    actorName: row.actor_name || "System",
+    actorEmail: row.actor_email || "",
+    actorRole: row.actor_role || "system",
+    action: row.action,
+    summary: row.summary || "",
+    affectedUserId: row.affected_user_id,
+    affectedUserName: row.affected_user_name || "",
+    relatedType: row.related_type,
+    relatedId: row.related_id,
+    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {}
+  };
+}
+
+function sessionToRow(session) {
+  return {
+    token: session.token,
+    user_id: session.userId,
+    expires_at: Number(session.expiresAt || 0),
+    created_at: session.createdAt
+  };
+}
+
+function sessionFromRow(row) {
+  return {
+    token: row.token,
+    userId: row.user_id,
+    expiresAt: Number(row.expires_at || 0),
+    createdAt: row.created_at
+  };
+}
+
+const SUPABASE_TABLES = [
+  { field: "users", table: "cls_users", key: "id", order: "created_at.asc", toRow: userToRow, fromRow: userFromRow },
+  { field: "leaveRequests", table: "cls_leave_requests", key: "id", order: "created_at.desc", toRow: leaveRequestToRow, fromRow: leaveRequestFromRow },
+  { field: "leaveAdjustments", table: "cls_leave_adjustments", key: "id", order: "created_at.desc", toRow: leaveAdjustmentToRow, fromRow: leaveAdjustmentFromRow },
+  { field: "medicalClaims", table: "cls_claims", key: "id", order: "created_at.desc", toRow: claimToRow, fromRow: claimFromRow },
+  { field: "emails", table: "cls_emails", key: "id", order: "created_at.desc", toRow: emailToRow, fromRow: emailFromRow },
+  { field: "auditEvents", table: "cls_audit_events", key: "id", order: "created_at.desc", toRow: auditEventToRow, fromRow: auditEventFromRow },
+  { field: "sessions", table: "cls_sessions", key: "token", order: "created_at.desc", toRow: sessionToRow, fromRow: sessionFromRow }
+];
+
+function rowSnapshot(rows, key) {
+  return Object.fromEntries(rows.map((row) => [String(row[key]), JSON.stringify(row)]));
+}
+
+function attachSupabaseSnapshot(db) {
+  const snapshot = {};
+  for (const config of SUPABASE_TABLES) {
+    const rows = (db[config.field] || []).map(config.toRow);
+    snapshot[config.field] = rowSnapshot(rows, config.key);
+  }
+  Object.defineProperty(db, "__supabaseSnapshot", {
+    value: snapshot,
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
   return db;
 }
 
+async function loadSupabaseTable(config) {
+  const params = new URLSearchParams({ select: "*" });
+  if (config.order) params.set("order", config.order);
+  const response = await supabaseRequest(`/rest/v1/${config.table}?${params.toString()}`, {
+    headers: { Accept: "application/json" }
+  });
+  return response.json();
+}
+
+async function loadSupabaseDb() {
+  let rowsByField;
+  try {
+    const tableRows = await Promise.all(SUPABASE_TABLES.map(loadSupabaseTable));
+    rowsByField = Object.fromEntries(
+      SUPABASE_TABLES.map((config, index) => [
+        config.field,
+        tableRows[index].map(config.fromRow)
+      ])
+    );
+  } catch (error) {
+    throw new Error(
+      `Supabase table data layer is not ready. Apply supabase/v1-rollout.sql before deploying this version. ${error.message}`
+    );
+  }
+
+  if (!rowsByField.users.length) {
+    const db = seedProductionDb();
+    applyLeaveYearRollover(db);
+    applyServiceAnniversaryAccrual(db);
+    await saveSupabaseDb(db);
+    return db;
+  }
+
+  const db = attachSupabaseSnapshot(normalizeDb(rowsByField));
+  const rollover = applyLeaveYearRollover(db);
+  const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
+  const sessionsPruned = pruneExpiredSessions(db);
+  if (rollover.changed || anniversaryAccrual.changed || sessionsPruned) await saveSupabaseDb(db);
+  return db;
+}
+
+async function upsertSupabaseRows(config, rows) {
+  if (!rows.length) return;
+  await supabaseRequest(
+    `/rest/v1/${config.table}?on_conflict=${encodeURIComponent(config.key)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal"
+      },
+      body: JSON.stringify(rows)
+    }
+  );
+}
+
+async function deleteSupabaseRows(config, keys) {
+  if (!keys.length) return;
+  const batchSize = 100;
+  for (let index = 0; index < keys.length; index += batchSize) {
+    const batch = keys.slice(index, index + batchSize);
+    const filter = batch.map((key) => encodeURIComponent(String(key))).join(",");
+    await supabaseRequest(
+      `/rest/v1/${config.table}?${encodeURIComponent(config.key)}=in.(${filter})`,
+      { method: "DELETE" }
+    );
+  }
+}
+
 async function saveSupabaseDb(db) {
+  const previous = db.__supabaseSnapshot || {};
+  const serialized = {};
+  const upserts = [];
+  const deletes = [];
+
+  for (const config of SUPABASE_TABLES) {
+    const rows = (db[config.field] || []).map(config.toRow);
+    serialized[config.field] = rows;
+    const before = previous[config.field] || {};
+    const after = rowSnapshot(rows, config.key);
+    const changedRows = rows.filter((row) => before[String(row[config.key])] !== JSON.stringify(row));
+    const deletedKeys = Object.keys(before).filter((key) => !after[key]);
+    if (changedRows.length) upserts.push([config, changedRows]);
+    if (deletedKeys.length) deletes.push([config, deletedKeys]);
+  }
+
+  for (const [config, keys] of deletes.slice().reverse()) {
+    await deleteSupabaseRows(config, keys);
+  }
+  for (const [config, rows] of upserts) {
+    await upsertSupabaseRows(config, rows);
+  }
+
+  const normalizedRowsByField = Object.fromEntries(
+    SUPABASE_TABLES.map((config) => [config.field, serialized[config.field].map(config.fromRow)])
+  );
+  attachSupabaseSnapshot(Object.assign(db, normalizeDb(normalizedRowsByField)));
+}
+
+async function saveSupabaseLegacyStateDb(db) {
   await supabaseRequest(
     `/rest/v1/cls_app_state?on_conflict=key`,
     {
@@ -384,8 +756,36 @@ async function saveSupabaseDb(db) {
   );
 }
 
+async function loadSupabaseLegacyStateDb() {
+  const response = await supabaseRequest(
+    `/rest/v1/cls_app_state?key=eq.${encodeURIComponent(SUPABASE_STATE_KEY)}&select=data`,
+    { headers: { Accept: "application/json" } }
+  );
+  const rows = await response.json();
+  if (Array.isArray(rows) && rows[0]?.data) {
+    const db = normalizeDb(rows[0].data);
+    const rollover = applyLeaveYearRollover(db);
+    const anniversaryAccrual = applyServiceAnniversaryAccrual(db);
+    const sessionsPruned = pruneExpiredSessions(db);
+    if (rollover.changed || anniversaryAccrual.changed || sessionsPruned) await saveSupabaseLegacyStateDb(db);
+    return db;
+  }
+
+  const db = seedProductionDb();
+  applyLeaveYearRollover(db);
+  applyServiceAnniversaryAccrual(db);
+  await saveSupabaseLegacyStateDb(db);
+  return db;
+}
+
+function useSupabaseLegacyState() {
+  return String(process.env.SUPABASE_DATA_MODE || "").toLowerCase() === "legacy_state";
+}
+
 async function loadDb() {
-  if (isSupabaseEnabled()) return loadSupabaseDb();
+  if (isSupabaseEnabled()) {
+    return useSupabaseLegacyState() ? loadSupabaseLegacyStateDb() : loadSupabaseDb();
+  }
 
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
@@ -408,7 +808,8 @@ async function loadDb() {
 
 async function saveDb(db) {
   if (isSupabaseEnabled()) {
-    await saveSupabaseDb(db);
+    if (useSupabaseLegacyState()) await saveSupabaseLegacyStateDb(db);
+    else await saveSupabaseDb(db);
     return;
   }
 
@@ -3118,6 +3519,7 @@ module.exports = {
     resetEmployeePassword,
     resolveSupabaseSignedUrl,
     storageObjectEndpoint,
+    supabaseTableConfigs: SUPABASE_TABLES,
     verifyPassword
   }
 };

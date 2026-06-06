@@ -1,26 +1,39 @@
 # CLS Production Rollout Notes
 
-This build uses a local JSON data store on a developer machine. In production, the same application state is stored in Supabase, receipt uploads go to Supabase Storage, email is delivered through Resend, and Vercel hosts the web app plus a daily maintenance schedule.
+This build uses a local JSON data store on a developer machine. In production, application data is stored in dedicated Supabase tables, receipt uploads go to Supabase Storage, email is delivered through Resend, and Vercel hosts the web app plus a daily maintenance schedule.
 
 ## Recommended Production Shape
 
 1. Vercel hosts the app and server routes.
-2. Supabase Postgres stores the V1 application state.
+2. Supabase Postgres stores V1 data in dedicated tables, not one app-state JSON record.
 3. Supabase Storage stores private claim receipt uploads.
 4. Server-side Vercel routes perform privileged admin actions, receipt access checks, and send real emails through Resend.
 5. Browser code never receives the Supabase service role key or Resend API key.
 
 ## Supabase
 
-Apply `supabase/v1-rollout.sql` to create the V1 production table and private `claim-receipts` bucket. The receipt bucket is configured for PDF, JPG, PNG, WebP, HEIC, and HEIF uploads up to 5 MB.
+Apply `supabase/v1-rollout.sql` to create the V1 production tables and private `claim-receipts` bucket. The tables use Row Level Security, are granted only to `service_role`, and are accessed only by Vercel server functions. The receipt bucket is configured for PDF, JPG, PNG, WebP, HEIC, and HEIF uploads up to 5 MB.
+
+The V1 tables are:
+
+- `cls_users`
+- `cls_leave_requests`
+- `cls_leave_adjustments`
+- `cls_claims`
+- `cls_emails`
+- `cls_audit_events`
+- `cls_sessions`
 
 The app expects these Vercel environment variables:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_RECEIPT_BUCKET` optional, defaults to `claim-receipts`
+- `SUPABASE_DATA_MODE` optional. Leave unset for the new table-based mode. Set to `legacy_state` only if you temporarily need the old `cls_app_state` JSON mode.
 
 Keep the service role key server-side only. Do not expose it in browser code or commit it to Git.
+
+Because the current data is test data, the recommended launch path is to apply the rollout SQL, deploy the app, sign in with the initial admin account, and create real employees from Admin. No test-data migration is required.
 
 ## Public Holiday Updates
 
@@ -57,6 +70,7 @@ Required Vercel environment variables:
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_DATA_MODE` optional; leave unset for table-based production
 - `RESEND_API_KEY`
 - `EMAIL_FROM`
 - `APP_URL`
