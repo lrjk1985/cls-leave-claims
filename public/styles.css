@@ -479,6 +479,10 @@ textarea:focus {
   cursor: not-allowed;
 }
 
+.button[aria-busy="true"] {
+  pointer-events: none;
+}
+
 .table-wrap {
   overflow-x: hidden;
 }

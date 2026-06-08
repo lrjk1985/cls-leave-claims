@@ -61,6 +61,95 @@ test("resolveSupabaseSignedUrl builds a browser upload URL from a token", () => 
   }
 });
 
+test("pruneExpiredSessions clears saved and in-memory expired sessions", () => {
+  const now = Date.now();
+  const expired = { token: "expired", userId: "usr_1", expiresAt: now - 1, createdAt: "2026-06-04T00:00:00.000Z" };
+  const current = { token: "current", userId: "usr_1", expiresAt: now + 1000, createdAt: "2026-06-04T01:00:00.000Z" };
+  const db = { sessions: [expired, current] };
+
+  __test.sessions.clear();
+  __test.sessions.set(expired.token, expired);
+  __test.sessions.set(current.token, current);
+
+  assert.equal(__test.pruneExpiredSessions(db, now), true);
+  assert.deepEqual(db.sessions, [current]);
+  assert.equal(__test.sessions.has(expired.token), false);
+  assert.equal(__test.sessions.has(current.token), true);
+
+  __test.sessions.clear();
+});
+
+test("limitSessionsForUser keeps only the newest sessions for that user", () => {
+  const now = Date.now();
+  const userSessions = Array.from({ length: 7 }, (_item, index) => ({
+    token: `usr_1_${index}`,
+    userId: "usr_1",
+    expiresAt: now + index,
+    createdAt: `2026-06-04T00:0${index}:00.000Z`
+  }));
+  const otherSession = {
+    token: "usr_2_0",
+    userId: "usr_2",
+    expiresAt: now,
+    createdAt: "2026-06-04T00:00:00.000Z"
+  };
+  const db = { sessions: [...userSessions, otherSession] };
+
+  __test.sessions.clear();
+  db.sessions.forEach((session) => __test.sessions.set(session.token, session));
+
+  assert.equal(__test.limitSessionsForUser(db, "usr_1", 3), true);
+  assert.deepEqual(
+    db.sessions.filter((session) => session.userId === "usr_1").map((session) => session.token),
+    ["usr_1_4", "usr_1_5", "usr_1_6"]
+  );
+  assert.equal(db.sessions.some((session) => session.token === otherSession.token), true);
+  assert.equal(__test.sessions.has("usr_1_0"), false);
+  assert.equal(__test.sessions.has("usr_1_6"), true);
+  assert.equal(__test.sessions.has(otherSession.token), true);
+
+  __test.sessions.clear();
+});
+
+test("deliverQueuedEmails records Resend failures without throwing", async () => {
+  const previousFetch = global.fetch;
+  const previousKey = process.env.RESEND_API_KEY;
+  const previousWarn = console.warn;
+  process.env.RESEND_API_KEY = "resend-test-key";
+  console.warn = () => {};
+  global.fetch = async () => ({
+    ok: false,
+    status: 500,
+    statusText: "Server Error",
+    text: async () => "temporary outage"
+  });
+
+  const db = {
+    users: [{ id: "usr_1", name: "Employee", email: "employee@cls.local" }],
+    emails: []
+  };
+  const email = __test.addEmail(db, {
+    recipientId: "usr_1",
+    type: "claim_decided",
+    subject: "Claim approved",
+    body: "Your claim was approved.",
+    relatedId: "claim_1"
+  });
+
+  try {
+    const result = await __test.deliverQueuedEmails(db);
+    assert.equal(result.failed, 1);
+    assert.equal(result.changed, true);
+    assert.equal(email.delivered, false);
+    assert.match(email.deliveryError, /Resend returned HTTP 500/);
+  } finally {
+    global.fetch = previousFetch;
+    console.warn = previousWarn;
+    if (previousKey === undefined) delete process.env.RESEND_API_KEY;
+    else process.env.RESEND_API_KEY = previousKey;
+  }
+});
+
 test("resetEmployeePassword sets a new temporary password", () => {
   const db = {
     users: [

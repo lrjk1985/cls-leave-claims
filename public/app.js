@@ -133,6 +133,12 @@ function statusLabel(status) {
   return "Pending";
 }
 
+function emailDeliveryText(email) {
+  if (email.delivered) return `Delivered${email.deliveredAt ? ` ${dateTimeText(email.deliveredAt)}` : ""}`;
+  if (email.deliveryError) return `Failed: ${email.deliveryError}`;
+  return "Queued locally";
+}
+
 function signedDays(value) {
   const days = Number(value || 0);
   return `${days > 0 ? "+" : ""}${days}`;
@@ -616,6 +622,60 @@ function setFormSubmitting(form, submitting, label = "Submitting...") {
   form.querySelectorAll("input, select, textarea, button").forEach((control) => {
     control.disabled = submitting;
   });
+}
+
+function formSubmittingLabel(formType) {
+  return {
+    login: "Signing in...",
+    leave: "Submitting Leave...",
+    claim: "Submitting Claim...",
+    employee: "Creating Employee...",
+    "leave-adjustment": "Applying Adjustment...",
+    password: "Changing Password..."
+  }[formType] || "Submitting...";
+}
+
+function busyButtonScope(button) {
+  return button.closest(".decision-box") ||
+    button.closest(".employee-action-bar") ||
+    button.closest(".modal-actions") ||
+    button.closest(".history-more");
+}
+
+async function withButtonBusy(button, label, work) {
+  if (button.dataset.busy === "true") {
+    showToast("Please wait for this action to finish.", "error");
+    return null;
+  }
+
+  const scope = busyButtonScope(button);
+  const controls = scope ? [...scope.querySelectorAll("button")] : [button];
+  controls.forEach((control) => {
+    control.dataset.wasDisabled = control.disabled ? "true" : "false";
+    control.disabled = true;
+  });
+  button.dataset.busy = "true";
+  button.setAttribute("aria-busy", "true");
+  button.dataset.originalText = button.dataset.originalText || button.textContent;
+  button.textContent = label;
+
+  try {
+    return await work();
+  } finally {
+    controls.forEach((control) => {
+      if (!control.isConnected) return;
+      control.disabled = control.dataset.wasDisabled === "true";
+      delete control.dataset.wasDisabled;
+    });
+    if (button.isConnected) {
+      if (button.dataset.originalText) {
+        button.textContent = button.dataset.originalText;
+        delete button.dataset.originalText;
+      }
+      button.removeAttribute("aria-busy");
+      delete button.dataset.busy;
+    }
+  }
 }
 
 async function uploadReceiptToSignedUrl(upload, file) {
@@ -1578,7 +1638,7 @@ function renderMailList(emails) {
       ${emails.map((email) => `
         <article class="mail-item">
           <div class="mail-subject">${escapeHtml(email.subject)}</div>
-          <div class="mail-meta">To ${escapeHtml(email.to)} - ${dateTimeText(email.createdAt)}</div>
+          <div class="mail-meta">To ${escapeHtml(email.to)} - ${dateTimeText(email.createdAt)} - ${escapeHtml(emailDeliveryText(email))}</div>
           <div>${escapeHtml(email.body)}</div>
         </article>
       `).join("")}
@@ -1796,7 +1856,7 @@ document.addEventListener("submit", async (event) => {
   }
 
   const body = formObject(form);
-  const submittingLabel = formType === "claim" ? "Submitting Claim..." : "Submitting...";
+  const submittingLabel = formSubmittingLabel(formType);
   try {
     setFormSubmitting(form, true, submittingLabel);
     state.busy = true;
@@ -1882,69 +1942,87 @@ document.addEventListener("click", async (event) => {
     if (action === "tab") {
       state.activeTab = button.dataset.tab;
       render();
+      return;
     }
 
     if (action === "logout") {
-      await api("/api/logout", { method: "POST", body: "{}" });
-      state.dashboard = null;
-      state.activeTab = "overview";
-      render();
+      await withButtonBusy(button, "Signing out...", async () => {
+        await api("/api/logout", { method: "POST", body: "{}" });
+        state.dashboard = null;
+        state.activeTab = "overview";
+        render();
+      });
+      return;
     }
 
     if (action === "decide") {
-      const note = document.querySelector(`[data-note-for="${button.dataset.id}"]`)?.value || "";
-      const path = button.dataset.kind === "leave"
-        ? `/api/leave-requests/${button.dataset.id}/status`
-        : `/api/claims/${button.dataset.id}/status`;
-      const data = await api(path, {
-        method: "PATCH",
-        body: JSON.stringify({
-          status: button.dataset.status,
-          decisionNote: note
-        })
+      const label = button.dataset.status === "approved" ? "Approving..." : "Not Approving...";
+      await withButtonBusy(button, label, async () => {
+        const note = document.querySelector(`[data-note-for="${button.dataset.id}"]`)?.value || "";
+        const path = button.dataset.kind === "leave"
+          ? `/api/leave-requests/${button.dataset.id}/status`
+          : `/api/claims/${button.dataset.id}/status`;
+        const data = await api(path, {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: button.dataset.status,
+            decisionNote: note
+          })
+        });
+        updateDashboard(data);
+        showToast(button.dataset.status === "approved" ? "Approved." : "Not approved.");
       });
-      updateDashboard(data);
-      showToast(button.dataset.status === "approved" ? "Approved." : "Not approved.");
+      return;
     }
 
     if (action === "cancel-leave") {
       if (!window.confirm("Cancel this leave request?")) return;
-      const data = await api(`/api/leave-requests/${button.dataset.id}/cancel`, {
-        method: "PATCH",
-        body: "{}"
+      await withButtonBusy(button, "Cancelling...", async () => {
+        const data = await api(`/api/leave-requests/${button.dataset.id}/cancel`, {
+          method: "PATCH",
+          body: "{}"
+        });
+        updateDashboard(data);
+        showToast("Leave request cancelled.");
       });
-      updateDashboard(data);
-      showToast("Leave request cancelled.");
+      return;
     }
 
     if (action === "save-employee") {
-      const row = button.closest("[data-employee-id]");
-      const data = await api(`/api/employees/${button.dataset.id}`, {
-        method: "PATCH",
-        body: JSON.stringify(employeeRowBody(row))
+      await withButtonBusy(button, "Saving...", async () => {
+        const row = button.closest("[data-employee-id]");
+        const data = await api(`/api/employees/${button.dataset.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(employeeRowBody(row))
+        });
+        updateDashboard(data);
+        showToast("Employee updated.");
       });
-      updateDashboard(data);
-      showToast("Employee updated.");
+      return;
     }
 
     if (action === "open-password-reset") {
       state.passwordReset = { employeeId: button.dataset.id };
       render();
+      return;
     }
 
     if (action === "close-password-reset") {
       state.passwordReset = { employeeId: null };
       render();
+      return;
     }
 
     if (action === "open-leave-adjustment") {
       state.leaveAdjustment = { employeeId: button.dataset.id };
       render();
+      return;
     }
 
     if (action === "close-leave-adjustment") {
       state.leaveAdjustment = { employeeId: null };
       render();
+      return;
     }
 
     if (action === "confirm-password-reset") {
@@ -1959,12 +2037,15 @@ document.addEventListener("click", async (event) => {
         return;
       }
 
-      const data = await api(`/api/employees/${button.dataset.id}/password`, {
-        method: "POST",
-        body: JSON.stringify({ password })
+      await withButtonBusy(button, "Resetting...", async () => {
+        const data = await api(`/api/employees/${button.dataset.id}/password`, {
+          method: "POST",
+          body: JSON.stringify({ password })
+        });
+        updateDashboard(data);
+        showToast("Temporary password reset.");
       });
-      updateDashboard(data);
-      showToast("Temporary password reset.");
+      return;
     }
 
     if (action === "save-all-employees") {
@@ -1974,36 +2055,45 @@ document.addEventListener("click", async (event) => {
         return;
       }
 
-      button.disabled = true;
-      const data = await api("/api/employees/bulk", {
-        method: "PATCH",
-        body: JSON.stringify({
-          employees: rows.map((row) => ({
-            id: row.dataset.employeeId,
-            ...employeeRowBody(row)
-          }))
-        })
+      await withButtonBusy(button, "Saving All...", async () => {
+        const data = await api("/api/employees/bulk", {
+          method: "PATCH",
+          body: JSON.stringify({
+            employees: rows.map((row) => ({
+              id: row.dataset.employeeId,
+              ...employeeRowBody(row)
+            }))
+          })
+        });
+        updateDashboard(data);
+        showToast(`${rows.length} employee record${rows.length === 1 ? "" : "s"} saved.`);
       });
-      updateDashboard(data);
-      showToast(`${rows.length} employee record${rows.length === 1 ? "" : "s"} saved.`);
+      return;
     }
 
     if (action === "history-load-more") {
-      const kind = button.dataset.kind;
-      await loadHistory(kind, { append: true });
+      await withButtonBusy(button, "Loading...", async () => {
+        const kind = button.dataset.kind;
+        await loadHistory(kind, { append: true });
+      });
+      return;
     }
 
     if (action === "mail-load-more") {
-      await loadMail({ append: true });
+      await withButtonBusy(button, "Loading...", async () => {
+        await loadMail({ append: true });
+      });
+      return;
     }
 
     if (action === "audit-load-more") {
-      await loadAudit({ append: true });
+      await withButtonBusy(button, "Loading...", async () => {
+        await loadAudit({ append: true });
+      });
+      return;
     }
   } catch (error) {
     showToast(error.message, "error");
-  } finally {
-    if (button) button.disabled = false;
   }
 });
 

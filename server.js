@@ -39,6 +39,7 @@ const DB_PATH = path.join(DATA_DIR, "local-db.json");
 const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const SESSION_TTL_MS = 1000 * 60 * 60 * 8;
+const MAX_SESSIONS_PER_USER = 5;
 const MAX_JSON_BYTES = 10_000_000;
 const MAX_RECEIPT_BYTES = 5_000_000;
 const MAX_MULTIPART_BYTES = MAX_RECEIPT_BYTES + 1_000_000;
@@ -126,6 +127,46 @@ function changePassword(user, body) {
   if (verifyPassword(newPassword, user)) throw new Error("New password must be different from your current password.");
 
   return setUserPassword(user, newPassword, "New password");
+}
+
+function pruneMemorySessions(now = Date.now()) {
+  let removed = 0;
+  for (const [token, session] of sessions.entries()) {
+    if (Number(session.expiresAt) < now) {
+      sessions.delete(token);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+function sessionRecency(session) {
+  return Number(session.expiresAt || 0) || new Date(session.createdAt || 0).getTime() || 0;
+}
+
+function limitSessionsForUser(db, userId, maxSessions = MAX_SESSIONS_PER_USER) {
+  if (!Array.isArray(db.sessions)) db.sessions = [];
+  const userSessions = db.sessions
+    .filter((session) => session.userId === userId)
+    .sort((left, right) => sessionRecency(right) - sessionRecency(left));
+  const allowedTokens = new Set(userSessions.slice(0, maxSessions).map((session) => session.token));
+  let changed = false;
+
+  db.sessions = db.sessions.filter((session) => {
+    if (session.userId !== userId || allowedTokens.has(session.token)) return true;
+    sessions.delete(session.token);
+    changed = true;
+    return false;
+  });
+
+  for (const [token, session] of sessions.entries()) {
+    if (session.userId === userId && !allowedTokens.has(token)) {
+      sessions.delete(token);
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function keepOnlyCurrentSession(db, userId, currentToken) {
@@ -1268,13 +1309,16 @@ function getUserByEmail(db, email) {
   return db.users.find((user) => user.email.toLowerCase() === String(email).toLowerCase());
 }
 
-function pruneExpiredSessions(db) {
+function pruneExpiredSessions(db, now = Date.now()) {
+  if (!Array.isArray(db.sessions)) db.sessions = [];
+  const memoryRemoved = pruneMemorySessions(now);
   const before = db.sessions.length;
-  db.sessions = db.sessions.filter((session) => Number(session.expiresAt) >= Date.now());
-  return before !== db.sessions.length;
+  db.sessions = db.sessions.filter((session) => Number(session.expiresAt) >= now);
+  return before !== db.sessions.length || memoryRemoved > 0;
 }
 
 function getAuthenticatedUser(req, db) {
+  pruneMemorySessions();
   const token = parseCookies(req).cls_session;
   if (!token) return null;
   let session = sessions.get(token);
@@ -1374,8 +1418,21 @@ function makeEmail(users, payload) {
     createdAt: payload.createdAt || nowIso(),
     delivered: false,
     deliveredAt: null,
-    deliveryError: null
+    deliveryError: null,
+    providerId: null
   };
+}
+
+function queuedEmailDeliveries(db) {
+  if (!Object.prototype.hasOwnProperty.call(db, "__queuedEmailDeliveries")) {
+    Object.defineProperty(db, "__queuedEmailDeliveries", {
+      value: [],
+      enumerable: false,
+      configurable: true,
+      writable: true
+    });
+  }
+  return db.__queuedEmailDeliveries;
 }
 
 function htmlEmailBody(body) {
@@ -1498,20 +1555,65 @@ async function deliverEmail(email, options = {}) {
   return { delivered: true, providerId: result.id || result.data?.id || null };
 }
 
-async function addEmail(db, payload, options = {}) {
+function addEmail(db, payload, options = {}) {
+  if (!Array.isArray(db.emails)) db.emails = [];
   const email = makeEmail(db.users, payload);
   db.emails.unshift(email);
-  try {
-    const result = await deliverEmail(email, options);
-    email.delivered = Boolean(result.delivered);
-    email.deliveredAt = result.delivered ? nowIso() : null;
-    email.providerId = result.providerId || null;
-  } catch (error) {
-    email.delivered = false;
-    email.deliveryError = error.message;
-    console.warn(`[Email delivery] ${error.message}`);
-  }
+  queuedEmailDeliveries(db).push({
+    emailId: email.id,
+    options
+  });
   return email;
+}
+
+async function deliverQueuedEmails(db) {
+  const queue = queuedEmailDeliveries(db).splice(0);
+  const result = {
+    changed: false,
+    delivered: 0,
+    failed: 0,
+    skipped: 0
+  };
+
+  for (const delivery of queue) {
+    const email = db.emails.find((item) => item.id === delivery.emailId);
+    if (!email) {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      const deliveryResult = await deliverEmail(email, delivery.options);
+      email.delivered = Boolean(deliveryResult.delivered);
+      email.deliveredAt = deliveryResult.delivered ? nowIso() : null;
+      email.deliveryError = null;
+      email.providerId = deliveryResult.providerId || null;
+      if (deliveryResult.delivered) {
+        result.delivered += 1;
+        console.log(`[Email delivery] Delivered ${email.type} to ${email.to}.`);
+      } else {
+        result.skipped += 1;
+      }
+    } catch (error) {
+      email.delivered = false;
+      email.deliveredAt = null;
+      email.deliveryError = error.message;
+      result.failed += 1;
+      console.warn(`[Email delivery] ${error.message}`);
+    }
+    result.changed = true;
+  }
+
+  return result;
+}
+
+async function saveDbAndDeliverQueuedEmails(db) {
+  await saveDb(db);
+  const deliveryResult = await deliverQueuedEmails(db);
+  if (deliveryResult.changed) {
+    await saveDb(db);
+  }
+  return deliveryResult;
 }
 
 function safeReceiptName(name) {
@@ -2985,6 +3087,7 @@ async function handleApi(req, res, pathname) {
     const session = { token, userId: user.id, expiresAt: Date.now() + SESSION_TTL_MS, createdAt: nowIso() };
     sessions.set(token, session);
     db.sessions.unshift(session);
+    limitSessionsForUser(db, user.id);
     await saveDb(db);
     setSessionCookie(res, token);
     return jsonResponse(res, 200, { data: dashboard(db, user) });
@@ -3202,7 +3305,7 @@ async function handleApi(req, res, pathname) {
         medicalClaimLimit: employee.medicalClaimLimit
       }
     });
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 201, {
       data: {
         employee: publicUser(employee),
@@ -3284,7 +3387,7 @@ async function handleApi(req, res, pathname) {
         hasMedicalCertificate: Boolean(request.medicalCertificate)
       }
     });
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 201, {
       data: {
         request,
@@ -3311,7 +3414,7 @@ async function handleApi(req, res, pathname) {
         days: request.days
       }
     });
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 200, {
       data: {
         request,
@@ -3335,7 +3438,7 @@ async function handleApi(req, res, pathname) {
         decisionNote: request.decisionNote
       }
     });
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 200, {
       data: {
         request,
@@ -3407,7 +3510,7 @@ async function handleApi(req, res, pathname) {
         }
       });
     }
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 201, {
       data: {
         claim,
@@ -3434,7 +3537,7 @@ async function handleApi(req, res, pathname) {
         claimType: claim.claimType
       }
     });
-    await saveDb(db);
+    await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 200, {
       data: {
         claim,
@@ -3506,18 +3609,23 @@ module.exports = {
   handleRequest,
   __test: {
     addAuditEvent,
+    addEmail,
     addMaintenanceAuditEvents,
     applyLeaveYearRollover,
     auditPage,
     cancelLeaveRequest,
     createClaim,
     createLeaveAdjustment,
+    deliverQueuedEmails,
+    limitSessionsForUser,
     multipartBoundary,
     parseMultipartBuffer,
     parseReceipt,
+    pruneExpiredSessions,
     receiptUploadMetadata,
     resetEmployeePassword,
     resolveSupabaseSignedUrl,
+    sessions,
     storageObjectEndpoint,
     supabaseTableConfigs: SUPABASE_TABLES,
     verifyPassword
