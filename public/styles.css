@@ -143,7 +143,6 @@ button {
 }
 
 .sidebar-quote {
-  margin-top: auto;
   padding-top: 10px;
   color: var(--muted);
 }
