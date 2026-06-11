@@ -98,6 +98,13 @@ function claimTypeLabel(type) {
   return type === "general" ? "General Claim" : "Medical Claim";
 }
 
+function claimExportEmployees() {
+  const employees = state.dashboard?.allEmployees || state.dashboard?.users || [];
+  return employees
+    .slice()
+    .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+}
+
 function dateText(value) {
   if (!value) return "-";
   return new Intl.DateTimeFormat("en-SG", {
@@ -1146,6 +1153,39 @@ function renderLeave() {
   `);
 }
 
+function renderClaimsExportPanel() {
+  if (!isAdmin()) return "";
+  const employees = claimExportEmployees();
+  return `
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">Medical Claim Exports</h2>
+      </div>
+      <div class="section-body">
+        <div class="form-grid three">
+          <div class="field">
+            <label for="medical-claims-export-year">Year</label>
+            <input id="medical-claims-export-year" data-export-field="medical-claims-year" type="number" min="2000" max="2100" step="1" value="${currentYearText()}">
+          </div>
+          <div class="field">
+            <label for="medical-claims-export-employee">Employee</label>
+            <select id="medical-claims-export-employee" data-export-field="medical-claims-employee">
+              <option value="">Select employee</option>
+              ${employees.map((employee) => `
+                <option value="${escapeHtml(employee.id)}">${escapeHtml(employee.name)} (${escapeHtml(employee.email)})</option>
+              `).join("")}
+            </select>
+          </div>
+          <div class="field actions">
+            <button class="button" type="button" data-action="export-medical-claims-employee">Export Employee</button>
+            <button class="button primary" type="button" data-action="export-medical-claims-all">Export All</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderClaims() {
   const summary = state.dashboard.medicalClaimSummary;
   const generalSummary = state.dashboard.generalClaimSummary || { pending: 0, approved: 0 };
@@ -1180,6 +1220,7 @@ function renderClaims() {
           <div class="metric-value money-value">${money(generalSummary.approved)}</div>
         </div>
       </section>
+      ${renderClaimsExportPanel()}
       <section class="section">
         <div class="section-header">
           <h2 class="section-title">New Claim</h2>
@@ -1459,6 +1500,13 @@ function employeeRowBody(row) {
       : field.value;
   });
   return body;
+}
+
+function medicalClaimsExportUrl({ employeeId = "" } = {}) {
+  const year = document.querySelector("[data-export-field='medical-claims-year']")?.value || currentYearText();
+  const params = new URLSearchParams({ year });
+  if (employeeId) params.set("employeeId", employeeId);
+  return `/api/exports/medical-claims?${params.toString()}`;
 }
 
 function renderLeaveAdjustmentHistory() {
@@ -2096,6 +2144,21 @@ document.addEventListener("click", async (event) => {
         updateDashboard(data);
         showToast(`${rows.length} employee record${rows.length === 1 ? "" : "s"} saved.`);
       });
+      return;
+    }
+
+    if (action === "export-medical-claims-all") {
+      window.location.assign(medicalClaimsExportUrl());
+      return;
+    }
+
+    if (action === "export-medical-claims-employee") {
+      const employeeId = document.querySelector("[data-export-field='medical-claims-employee']")?.value || "";
+      if (!employeeId) {
+        showToast("Select an employee first.", "error");
+        return;
+      }
+      window.location.assign(medicalClaimsExportUrl({ employeeId }));
       return;
     }
 

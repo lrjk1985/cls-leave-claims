@@ -205,6 +205,15 @@ function textResponse(res, status, body, contentType = "text/plain; charset=utf-
   res.end(body);
 }
 
+function csvResponse(res, filename, body) {
+  res.writeHead(200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Content-Length": Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   return Object.fromEntries(
@@ -2440,6 +2449,101 @@ function auditPage(db, user, searchParams) {
   };
 }
 
+function csvCell(value) {
+  let text = String(value ?? "");
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvDocument(headers, rows) {
+  const lines = [
+    headers.map(csvCell).join(","),
+    ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(","))
+  ];
+  return `\uFEFF${lines.join("\r\n")}\r\n`;
+}
+
+function exportYear(searchParams) {
+  const year = String(searchParams.get("year") || currentLeaveYear()).trim();
+  if (!/^\d{4}$/.test(year)) {
+    throw new Error("Export year must be a four-digit year.");
+  }
+  return year;
+}
+
+function medicalClaimsExport(db, user, searchParams) {
+  requireAdmin(user);
+  const year = exportYear(searchParams);
+  const employeeId = String(searchParams.get("employeeId") || "").trim();
+  if (employeeId && !getUser(db, employeeId)) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  const headers = [
+    "Claim ID",
+    "Claimant Name",
+    "Claimant Email",
+    "Claim Date",
+    "Submitted At",
+    "Clinic / Provider",
+    "Description",
+    "Amount",
+    "Status",
+    "Decision Date",
+    "Approver",
+    "Decision Note",
+    "Receipt Filename"
+  ];
+  const claims = db.medicalClaims
+    .filter((claim) => claim.claimType === "medical")
+    .filter((claim) => String(claim.claimDate || "").slice(0, 4) === year)
+    .filter((claim) => !employeeId || claim.employeeId === employeeId)
+    .sort((left, right) => {
+      const leftName = auditUserName(db, left.employeeId);
+      const rightName = auditUserName(db, right.employeeId);
+      return leftName.localeCompare(rightName) ||
+        String(left.claimDate || "").localeCompare(String(right.claimDate || "")) ||
+        String(left.id || "").localeCompare(String(right.id || ""));
+    });
+
+  const rows = claims.map((claim) => {
+    const claimant = getUser(db, claim.employeeId);
+    return {
+      "Claim ID": claim.id,
+      "Claimant Name": claimant?.name || "Unknown",
+      "Claimant Email": claimant?.email || "",
+      "Claim Date": claim.claimDate || "",
+      "Submitted At": claim.createdAt || "",
+      "Clinic / Provider": claim.provider || "",
+      Description: claim.description || "",
+      Amount: Number(claim.amount || 0).toFixed(2),
+      Status: statusLabelForExport(claim.status),
+      "Decision Date": claim.decidedAt || "",
+      Approver: auditUserName(db, claim.decidedBy || claim.managerId),
+      "Decision Note": claim.decisionNote || "",
+      "Receipt Filename": claim.receipt?.originalName || ""
+    };
+  });
+
+  const employee = employeeId ? getUser(db, employeeId) : null;
+  const fileScope = employee
+    ? employee.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "employee"
+    : "all-employees";
+  return {
+    filename: `medical-claims-${fileScope}-${year}.csv`,
+    body: csvDocument(headers, rows)
+  };
+}
+
+function statusLabelForExport(status) {
+  if (status === "approved") return "Approved";
+  if (status === "rejected") return "Not Approved";
+  if (status === "cancelled") return "Cancelled";
+  return "Pending";
+}
+
 function dashboard(db, user) {
   const employees = db.users.map(publicUser);
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
@@ -3281,6 +3385,11 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: historyPage(db, user, "claim", searchParams) });
   }
 
+  if (req.method === "GET" && pathname === "/api/exports/medical-claims") {
+    const exportFile = medicalClaimsExport(db, user, searchParams);
+    return csvResponse(res, exportFile.filename, exportFile.body);
+  }
+
   if (req.method === "GET" && pathname === "/api/history/emails") {
     return jsonResponse(res, 200, { data: emailPage(db, user, searchParams) });
   }
@@ -3643,6 +3752,7 @@ module.exports = {
     createLeaveAdjustment,
     deliverQueuedEmails,
     limitSessionsForUser,
+    medicalClaimsExport,
     multipartBoundary,
     parseMultipartBuffer,
     parseReceipt,

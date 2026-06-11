@@ -675,6 +675,142 @@ test("createClaim routes claims to the separate claims approver", async () => {
   });
 });
 
+test("medicalClaimsExport exports medical claims by year and employee", () => {
+  const db = {
+    users: [
+      {
+        id: "usr_admin",
+        name: "Admin",
+        email: "admin@cls.local",
+        role: "admin"
+      },
+      {
+        id: "usr_employee",
+        name: "Employee One",
+        email: "employee.one@cls.local",
+        role: "employee"
+      },
+      {
+        id: "usr_other",
+        name: "Employee Two",
+        email: "employee.two@cls.local",
+        role: "employee"
+      },
+      {
+        id: "usr_manager",
+        name: "Claims Manager",
+        email: "manager@cls.local",
+        role: "manager"
+      }
+    ],
+    medicalClaims: [
+      {
+        id: "claim_medical_1",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        claimType: "medical",
+        claimDate: "2026-06-04",
+        provider: "Raffles Medical",
+        description: "Consultation",
+        amount: 58.5,
+        status: "approved",
+        createdAt: "2026-06-04T00:00:00.000Z",
+        decidedAt: "2026-06-05T00:00:00.000Z",
+        decidedBy: "usr_manager",
+        decisionNote: "OK",
+        receipt: { originalName: "receipt.pdf" }
+      },
+      {
+        id: "claim_general_1",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        claimType: "general",
+        claimDate: "2026-06-04",
+        provider: "Office supplier",
+        description: "Stationery",
+        amount: 20,
+        status: "approved"
+      },
+      {
+        id: "claim_medical_other_year",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        claimType: "medical",
+        claimDate: "2025-06-04",
+        provider: "Old Clinic",
+        description: "Old consultation",
+        amount: 40,
+        status: "approved"
+      },
+      {
+        id: "claim_medical_other_employee",
+        employeeId: "usr_other",
+        managerId: "usr_manager",
+        claimType: "medical",
+        claimDate: "2026-06-04",
+        provider: "Other Clinic",
+        description: "Other consultation",
+        amount: 30,
+        status: "pending"
+      }
+    ]
+  };
+
+  const exportFile = __test.medicalClaimsExport(
+    db,
+    db.users[0],
+    new URLSearchParams({ year: "2026", employeeId: "usr_employee" })
+  );
+
+  assert.equal(exportFile.filename, "medical-claims-employee-one-2026.csv");
+  assert.match(exportFile.body, /Claimant Name,Claimant Email,Claim Date/);
+  assert.match(exportFile.body, /claim_medical_1/);
+  assert.match(exportFile.body, /Employee One/);
+  assert.match(exportFile.body, /58.50/);
+  assert.doesNotMatch(exportFile.body, /claim_general_1/);
+  assert.doesNotMatch(exportFile.body, /claim_medical_other_year/);
+  assert.doesNotMatch(exportFile.body, /claim_medical_other_employee/);
+});
+
+test("medicalClaimsExport exports all medical claims for the selected year", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const db = {
+    users: [
+      admin,
+      { id: "usr_one", name: "Employee One", email: "one@cls.local", role: "employee" },
+      { id: "usr_two", name: "Employee Two", email: "two@cls.local", role: "employee" }
+    ],
+    medicalClaims: [
+      {
+        id: "claim_one",
+        employeeId: "usr_one",
+        managerId: "usr_admin",
+        claimType: "medical",
+        claimDate: "2026-01-02",
+        provider: "Clinic One",
+        amount: 10,
+        status: "approved"
+      },
+      {
+        id: "claim_two",
+        employeeId: "usr_two",
+        managerId: "usr_admin",
+        claimType: "medical",
+        claimDate: "2026-02-02",
+        provider: "Clinic Two",
+        amount: 20,
+        status: "pending"
+      }
+    ]
+  };
+
+  const exportFile = __test.medicalClaimsExport(db, admin, new URLSearchParams({ year: "2026" }));
+
+  assert.equal(exportFile.filename, "medical-claims-all-employees-2026.csv");
+  assert.match(exportFile.body, /claim_one/);
+  assert.match(exportFile.body, /claim_two/);
+});
+
 test("Supabase table mappings round-trip core app records", () => {
   const byField = Object.fromEntries(__test.supabaseTableConfigs.map((config) => [config.field, config]));
   const records = {
