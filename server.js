@@ -230,6 +230,26 @@ function clearSessionCookie(res) {
   res.setHeader("Set-Cookie", "cls_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0");
 }
 
+function singaporeTodayIso(date = new Date()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-SG", {
+      timeZone: "Asia/Singapore",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(date).map((part) => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function leavePeriodHasPassed(request, asOfDate = new Date()) {
+  const today = typeof asOfDate === "string"
+    ? formatIsoDate(assertIsoDate(asOfDate, "Cancellation date"))
+    : singaporeTodayIso(asOfDate);
+  const endDate = formatIsoDate(assertIsoDate(String(request.endDate || ""), "Leave end date"));
+  return endDate < today;
+}
+
 async function readBody(req, maxBytes = MAX_JSON_BYTES) {
   const chunks = [];
   let total = 0;
@@ -2889,7 +2909,7 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
   return request;
 }
 
-async function cancelLeaveRequest(db, user, requestId, body = {}) {
+async function cancelLeaveRequest(db, user, requestId, body = {}, options = {}) {
   const request = db.leaveRequests.find((item) => item.id === requestId);
   if (!request) {
     const error = new Error("Leave request was not found.");
@@ -2901,8 +2921,11 @@ async function cancelLeaveRequest(db, user, requestId, body = {}) {
     error.status = 403;
     throw error;
   }
-  if (!["pending", "approved"].includes(request.status)) {
-    throw new Error("Only pending or approved leave requests can be cancelled.");
+  if (request.status !== "pending") {
+    throw new Error("Only pending leave requests can be cancelled before approval.");
+  }
+  if (leavePeriodHasPassed(request, options.asOfDate)) {
+    throw new Error("Leave requests cannot be cancelled after the leave period has passed.");
   }
 
   const previousStatus = request.status;
@@ -2915,10 +2938,8 @@ async function cancelLeaveRequest(db, user, requestId, body = {}) {
 
   const manager = getUser(db, request.managerId);
   const managerBody = [
-    `${user.name} has cancelled ${previousStatus === "approved" ? "an approved" : "a pending"} leave request from ${request.startDate} to ${request.endDate}.`,
-    previousStatus === "approved"
-      ? "Use the attached calendar file to remove this leave period from your calendar."
-      : "No approval action is needed. Use the attached calendar file to remove the tentative leave period from your calendar."
+    `${user.name} has cancelled a pending leave request from ${request.startDate} to ${request.endDate}.`,
+    "No approval action is needed. Use the attached calendar file to remove the tentative leave period from your calendar."
   ].join("\n\n");
 
   await addEmail(db, {
@@ -2939,28 +2960,6 @@ async function cancelLeaveRequest(db, user, requestId, body = {}) {
         ]
       : []
   });
-
-  if (previousStatus === "approved") {
-    await addEmail(db, {
-      recipientId: user.id,
-      type: "leave_cancelled_confirmation",
-      subject: "Leave request cancelled",
-      body: [
-        `Your approved leave request from ${request.startDate} to ${request.endDate} has been cancelled.`,
-        "Use the attached calendar file to remove this leave period from your calendar."
-      ].join("\n\n"),
-      relatedId: request.id
-    }, {
-      attachments: [
-        makeLeaveCalendarAttachment({
-          request,
-          employee: user,
-          reviewer: manager,
-          status: "CANCELLED"
-        })
-      ]
-    });
-  }
 
   return { request, previousStatus };
 }

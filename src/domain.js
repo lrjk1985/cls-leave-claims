@@ -93,12 +93,20 @@ function normalizeMoney(value, fieldName = "Amount") {
   return Math.round(amount * 100) / 100;
 }
 
+function normalizeHalfDayIncrement(days, fieldName) {
+  const doubled = days * 2;
+  if (Math.abs(doubled - Math.round(doubled)) > Number.EPSILON * 100) {
+    throw new Error(`${fieldName} must be in half-day increments.`);
+  }
+  return Math.round(doubled) / 2;
+}
+
 function normalizeLeaveDays(value, fieldName = "Leave days") {
   const days = Number(value);
   if (!Number.isFinite(days) || days < 0) {
     throw new Error(`${fieldName} must be 0 or more.`);
   }
-  return Math.round(days * 100) / 100;
+  return normalizeHalfDayIncrement(days, fieldName);
 }
 
 function normalizeSignedLeaveDays(value, fieldName = "Leave days") {
@@ -106,7 +114,7 @@ function normalizeSignedLeaveDays(value, fieldName = "Leave days") {
   if (!Number.isFinite(days)) {
     throw new Error(`${fieldName} must be a valid number.`);
   }
-  return Math.round(days * 100) / 100;
+  return normalizeHalfDayIncrement(days, fieldName);
 }
 
 function canAdmin(user) {

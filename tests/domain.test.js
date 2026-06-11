@@ -9,7 +9,9 @@ const {
   medicalClaimSummary,
   medicalLeaveSummary,
   nextLeaveYearBalance,
+  normalizeLeaveDays,
   normalizeMoney,
+  normalizeSignedLeaveDays,
   serviceAdjustedAnnualLeave,
   workingDaysBetween
 } = require("../src/domain");
@@ -198,4 +200,11 @@ test("canReview allows admins and assigned direct reports", () => {
 test("normalizeMoney rounds to cents and rejects invalid amounts", () => {
   assert.equal(normalizeMoney("58.456"), 58.46);
   assert.throws(() => normalizeMoney("0"), /greater than 0/);
+});
+
+test("normalizeLeaveDays only allows half-day increments", () => {
+  assert.equal(normalizeLeaveDays("14.5"), 14.5);
+  assert.equal(normalizeSignedLeaveDays("-0.5"), -0.5);
+  assert.throws(() => normalizeLeaveDays("14.25"), /half-day increments/);
+  assert.throws(() => normalizeSignedLeaveDays("-0.25"), /half-day increments/);
 });

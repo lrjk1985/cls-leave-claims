@@ -108,7 +108,15 @@ function dateText(value) {
 }
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-SG", {
+      timeZone: "Asia/Singapore",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).formatToParts(new Date()).map((part) => [part.type, part.value])
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
 function currentYearText() {
@@ -1264,7 +1272,9 @@ function renderDecisionControls(type, item) {
 }
 
 function canCancelLeave(item) {
-  return item.employeeId === state.dashboard.user.id && ["pending", "approved"].includes(item.status);
+  return item.employeeId === state.dashboard.user.id &&
+    item.status === "pending" &&
+    String(item.endDate || "") >= todayIso();
 }
 
 function renderLeaveApplicantControls(item) {

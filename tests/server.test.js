@@ -319,7 +319,7 @@ test("applyLeaveYearRollover grants annual birthday leave", () => {
   assert.equal(rollover.processed[0].birthdayLeave, 1);
 });
 
-test("cancelLeaveRequest lets applicants cancel approved leave and notifies calendars", async () => {
+test("cancelLeaveRequest lets applicants cancel pending future leave and notifies approvers", async () => {
   const manager = {
     id: "usr_manager",
     name: "Manager",
@@ -347,12 +347,12 @@ test("cancelLeaveRequest lets applicants cancel approved leave and notifies cale
         leaveYear: 2026,
         excludedDates: [],
         reason: "Family",
-        status: "approved",
+        status: "pending",
         decisionNote: "",
         createdAt: "2026-06-01T00:00:00.000Z",
         updatedAt: "2026-06-01T00:00:00.000Z",
-        decidedAt: "2026-06-02T00:00:00.000Z",
-        decidedBy: "usr_manager"
+        decidedAt: null,
+        decidedBy: null
       }
     ],
     emails: []
@@ -360,15 +360,63 @@ test("cancelLeaveRequest lets applicants cancel approved leave and notifies cale
 
   const { request, previousStatus } = await __test.cancelLeaveRequest(db, employee, "leave_1", {
     reason: "Plans changed"
+  }, {
+    asOfDate: "2026-06-09"
   });
 
-  assert.equal(previousStatus, "approved");
+  assert.equal(previousStatus, "pending");
   assert.equal(request.status, "cancelled");
   assert.equal(request.cancellationNote, "Plans changed");
   assert.equal(request.cancelledBy, "usr_employee");
-  assert.equal(db.emails.length, 2);
-  assert.equal(db.emails[0].recipientId, "usr_employee");
-  assert.equal(db.emails[1].recipientId, "usr_manager");
+  assert.equal(db.emails.length, 1);
+  assert.equal(db.emails[0].recipientId, "usr_manager");
+});
+
+test("cancelLeaveRequest rejects approved leave and past leave", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager"
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [
+      {
+        id: "leave_approved",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        type: "Annual Leave",
+        startDate: "2026-06-12",
+        endDate: "2026-06-12",
+        days: 1,
+        leaveYear: 2026,
+        status: "approved"
+      },
+      {
+        id: "leave_past",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        type: "Annual Leave",
+        startDate: "2026-06-10",
+        endDate: "2026-06-10",
+        days: 1,
+        leaveYear: 2026,
+        status: "pending"
+      }
+    ],
+    emails: []
+  };
+
+  await assert.rejects(
+    () => __test.cancelLeaveRequest(db, employee, "leave_approved", {}, { asOfDate: "2026-06-11" }),
+    /Only pending leave requests can be cancelled/
+  );
+  await assert.rejects(
+    () => __test.cancelLeaveRequest(db, employee, "leave_past", {}, { asOfDate: "2026-06-11" }),
+    /after the leave period has passed/
+  );
 });
 
 test("cancelLeaveRequest only allows the applicant to cancel", async () => {
