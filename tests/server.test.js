@@ -554,6 +554,76 @@ test("createLeaveAdjustment prevents deductions below available leave", () => {
   );
 });
 
+test("updateEmployee lets admins edit leave components and recalculates total leave", () => {
+  const year = new Date().getFullYear();
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leavePolicyYear: year,
+    startingLeaveEntitlement: 14,
+    annualLeaveEntitlement: 14,
+    carriedForwardLeave: 1,
+    birthdayLeaveEntitlement: 1,
+    leaveEntitlement: 16,
+    leaveServiceAccrualAt: "2026-01-01T00:00:00.000Z"
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    leaveAdjustments: [
+      {
+        id: "adjust_1",
+        employeeId: "usr_employee",
+        actorId: "usr_admin",
+        year,
+        days: 0.5,
+        reason: "Manual adjustment",
+        createdAt: "2026-01-02T00:00:00.000Z"
+      }
+    ]
+  };
+
+  const updated = __test.updateEmployee(db, "usr_employee", {
+    startingLeaveEntitlement: "15",
+    carriedForwardLeave: "2.5",
+    birthdayLeaveEntitlement: "1"
+  });
+
+  assert.equal(updated.annualLeaveEntitlement, 15);
+  assert.equal(updated.carriedForwardLeave, 2.5);
+  assert.equal(updated.birthdayLeaveEntitlement, 1);
+  assert.equal(updated.leaveEntitlement, 19);
+});
+
+test("updateEmployee rejects quarter-day carry forward and birthday leave", () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leaveEntitlement: 14,
+    annualLeaveEntitlement: 14,
+    carriedForwardLeave: 0,
+    birthdayLeaveEntitlement: 0
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    leaveAdjustments: []
+  };
+
+  assert.throws(
+    () => __test.updateEmployee(db, "usr_employee", { carriedForwardLeave: "0.25" }),
+    /half-day increments/
+  );
+  assert.throws(
+    () => __test.updateEmployee(db, "usr_employee", { birthdayLeaveEntitlement: "0.25" }),
+    /half-day increments/
+  );
+});
+
 test("createClaim routes claims to the separate claims approver", async () => {
   const employee = {
     id: "usr_employee",

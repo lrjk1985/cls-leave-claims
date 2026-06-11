@@ -2216,8 +2216,9 @@ function employeeChangeSet(db, before, after) {
     { key: "role", label: "role" },
     { key: "serviceStartDate", label: "service start" },
     { key: "annualLeaveEntitlement", label: "annual leave days" },
-    { key: "leaveEntitlement", label: "total leave entitlement" },
+    { key: "carriedForwardLeave", label: "carry forward leave" },
     { key: "birthdayLeaveEntitlement", label: "birthday leave" },
+    { key: "leaveEntitlement", label: "total leave entitlement" },
     { key: "medicalLeaveEntitlement", label: "medical leave entitlement" },
     { key: "medicalClaimLimit", label: "medical claim limit" },
     { key: "active", label: "active status" }
@@ -2529,6 +2530,8 @@ async function createEmployee(db, body) {
     body.startingLeaveEntitlement ?? body.leaveEntitlement ?? 0,
     "Initial annual leave days"
   );
+  const carriedForwardLeave = normalizeLeaveDays(body.carriedForwardLeave ?? 0, "Carry forward leave");
+  const birthdayLeaveEntitlement = normalizeLeaveDays(body.birthdayLeaveEntitlement ?? 0, "Birthday leave");
   const medicalClaimLimit = Number(body.medicalClaimLimit ?? 500);
   const password = assertPassword(body.password || "welcome123", "Temporary password");
 
@@ -2551,7 +2554,6 @@ async function createEmployee(db, body) {
   const createdAt = nowIso();
   const leavePolicyYear = currentLeaveYear();
   const annualLeaveEntitlement = initialAnnualLeaveDays;
-  const birthdayLeaveEntitlement = 0;
   const employee = {
     id: id("usr"),
     name,
@@ -2562,10 +2564,13 @@ async function createEmployee(db, body) {
     serviceStartDate,
     startingLeaveEntitlement: initialAnnualLeaveDays,
     annualLeaveEntitlement,
-    carriedForwardLeave: 0,
+    carriedForwardLeave,
     birthdayLeaveEntitlement,
     leavePolicyYear,
-    leaveEntitlement: normalizeLeaveDays(annualLeaveEntitlement + birthdayLeaveEntitlement, "Leave entitlement"),
+    leaveEntitlement: normalizeLeaveDays(
+      annualLeaveEntitlement + carriedForwardLeave + birthdayLeaveEntitlement,
+      "Leave entitlement"
+    ),
     leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
     medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
@@ -2630,16 +2635,21 @@ function updateEmployee(db, employeeId, body) {
       body.startingLeaveEntitlement,
       "Initial annual leave days"
     );
-    const leaveYear = Number(employee.leavePolicyYear || currentLeaveYear());
-    const adjustmentDays = leaveAdjustmentTotal(db, employee.id, leaveYear);
-    const birthdayLeave = normalizeLeaveDays(employee.birthdayLeaveEntitlement ?? 0, "Birthday leave");
     employee.startingLeaveEntitlement = initialAnnualLeaveDays;
     employee.annualLeaveEntitlement = initialAnnualLeaveDays;
-    employee.leaveEntitlement = normalizeLeaveDays(
-      initialAnnualLeaveDays + Number(employee.carriedForwardLeave || 0) + birthdayLeave + adjustmentDays,
-      "Leave entitlement"
-    );
+    recomputeEmployeeLeaveEntitlement(db, employee);
     employee.leaveServiceAccrualAt = nowIso();
+  }
+  if (body.carriedForwardLeave !== undefined) {
+    employee.carriedForwardLeave = normalizeLeaveDays(body.carriedForwardLeave, "Carry forward leave");
+    recomputeEmployeeLeaveEntitlement(db, employee);
+  }
+  if (body.birthdayLeaveEntitlement !== undefined) {
+    employee.birthdayLeaveEntitlement = normalizeLeaveDays(
+      body.birthdayLeaveEntitlement,
+      "Birthday leave"
+    );
+    recomputeEmployeeLeaveEntitlement(db, employee);
   }
   if (body.leaveEntitlement !== undefined) {
     employee.leaveEntitlement = normalizeLeaveDays(body.leaveEntitlement, "Leave entitlement");
@@ -2677,6 +2687,22 @@ function resetEmployeePassword(db, employeeId, body) {
   const temporaryPassword = assertPassword(body.password, "Temporary password");
   setUserPassword(employee, temporaryPassword, "Temporary password");
   return { employee, temporaryPassword };
+}
+
+function recomputeEmployeeLeaveEntitlement(db, employee) {
+  const leaveYear = Number(employee.leavePolicyYear || currentLeaveYear());
+  const annualLeave = normalizeLeaveDays(
+    employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement ?? 0,
+    "Annual leave days"
+  );
+  const carriedForward = normalizeLeaveDays(employee.carriedForwardLeave ?? 0, "Carry forward leave");
+  const birthdayLeave = normalizeLeaveDays(employee.birthdayLeaveEntitlement ?? 0, "Birthday leave");
+  const adjustmentDays = leaveAdjustmentTotal(db, employee.id, leaveYear);
+  employee.leaveEntitlement = normalizeLeaveDays(
+    annualLeave + carriedForward + birthdayLeave + adjustmentDays,
+    "Leave entitlement"
+  );
+  return employee.leaveEntitlement;
 }
 
 function updateEmployees(db, body) {
@@ -3622,11 +3648,13 @@ module.exports = {
     parseReceipt,
     pruneExpiredSessions,
     receiptUploadMetadata,
+    recomputeEmployeeLeaveEntitlement,
     resetEmployeePassword,
     resolveSupabaseSignedUrl,
     sessions,
     storageObjectEndpoint,
     supabaseTableConfigs: SUPABASE_TABLES,
+    updateEmployee,
     verifyPassword
   }
 };

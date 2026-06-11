@@ -1442,7 +1442,9 @@ function employeeSearchText(employee) {
     manager,
     claimApprover,
     `service ${employee.serviceStartDate}`,
-    `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement} birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
+    `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement}`,
+    `carry forward ${employee.carriedForwardLeave ?? 0}`,
+    `birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
     `medical leave ${employee.medicalLeaveEntitlement ?? 14}`,
     `medical ${employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
@@ -1537,6 +1539,14 @@ function renderEmployees() {
               <input id="employee-leave" name="startingLeaveEntitlement" type="number" min="0" step="0.5" value="14">
             </div>
             <div class="field">
+              <label for="employee-carry-forward">Carry Forward Leave</label>
+              <input id="employee-carry-forward" name="carriedForwardLeave" type="number" min="0" step="0.5" value="0">
+            </div>
+            <div class="field">
+              <label for="employee-birthday-leave">Birthday Leave</label>
+              <input id="employee-birthday-leave" name="birthdayLeaveEntitlement" type="number" min="0" step="0.5" value="0">
+            </div>
+            <div class="field">
               <label for="employee-medical-limit">Medical Claim Limit</label>
               <input id="employee-medical-limit" name="medicalClaimLimit" type="number" min="0" step="0.01" value="500">
             </div>
@@ -1596,6 +1606,14 @@ function renderEmployees() {
               <div class="field">
                 <label>Annual Leave Days</label>
                 <input data-field="startingLeaveEntitlement" type="number" min="0" step="0.5" value="${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement}">
+              </div>
+              <div class="field">
+                <label>Carry Forward</label>
+                <input data-field="carriedForwardLeave" type="number" min="0" step="0.5" value="${employee.carriedForwardLeave ?? 0}">
+              </div>
+              <div class="field">
+                <label>Birthday Leave</label>
+                <input data-field="birthdayLeaveEntitlement" type="number" min="0" step="0.5" value="${employee.birthdayLeaveEntitlement ?? 0}">
               </div>
               <div class="field">
                 <label>Current Total Leave</label>
