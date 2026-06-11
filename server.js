@@ -419,6 +419,10 @@ function nullish(value) {
   return value === undefined ? null : value;
 }
 
+function booleanValue(value) {
+  return value === true || value === "true" || value === "on" || value === "1" || value === 1;
+}
+
 function userToRow(user) {
   return {
     id: user.id,
@@ -432,6 +436,7 @@ function userToRow(user) {
     annual_leave_entitlement: Number(user.annualLeaveEntitlement || 0),
     carried_forward_leave: Number(user.carriedForwardLeave || 0),
     birthday_leave_entitlement: Number(user.birthdayLeaveEntitlement || 0),
+    unlimited_annual_leave: Boolean(user.unlimitedAnnualLeave),
     leave_policy_year: Number(user.leavePolicyYear || currentLeaveYear()),
     leave_entitlement: Number(user.leaveEntitlement || 0),
     leave_rollover_at: nullish(user.leaveRolloverAt),
@@ -459,6 +464,7 @@ function userFromRow(row) {
     annualLeaveEntitlement: Number(row.annual_leave_entitlement || 0),
     carriedForwardLeave: Number(row.carried_forward_leave || 0),
     birthdayLeaveEntitlement: Number(row.birthday_leave_entitlement || 0),
+    unlimitedAnnualLeave: Boolean(row.unlimited_annual_leave),
     leavePolicyYear: Number(row.leave_policy_year || currentLeaveYear()),
     leaveEntitlement: Number(row.leave_entitlement || 0),
     leaveRolloverAt: row.leave_rollover_at,
@@ -955,6 +961,7 @@ function normalizeUser(user) {
     ),
     carriedForwardLeave: normalizeLeaveDays(user.carriedForwardLeave ?? 0, "Carried forward leave"),
     birthdayLeaveEntitlement: normalizeLeaveDays(user.birthdayLeaveEntitlement ?? 0, "Birthday leave"),
+    unlimitedAnnualLeave: Boolean(user.unlimitedAnnualLeave),
     leavePolicyYear: Number(user.leavePolicyYear || thisYear),
     leaveEntitlement: Number(user.leaveEntitlement || 0),
     medicalClaimLimit: Number(user.medicalClaimLimit ?? 500),
@@ -1129,6 +1136,7 @@ function seedProductionDb() {
     annualLeaveEntitlement: 0,
     carriedForwardLeave: 0,
     birthdayLeaveEntitlement: 0,
+    unlimitedAnnualLeave: false,
     leavePolicyYear: currentLeaveYear(),
     serviceStartDate: formatIsoDate(new Date()),
     medicalClaimLimit: 0,
@@ -1189,6 +1197,7 @@ function seedDb() {
       annualLeaveEntitlement: 0,
       carriedForwardLeave: 0,
       birthdayLeaveEntitlement: 0,
+      unlimitedAnnualLeave: false,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2026-01-01",
       medicalClaimLimit: 0,
@@ -1210,6 +1219,7 @@ function seedDb() {
       annualLeaveEntitlement: 18,
       carriedForwardLeave: 0,
       birthdayLeaveEntitlement: 0,
+      unlimitedAnnualLeave: false,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2020-01-01",
       medicalClaimLimit: 500,
@@ -1231,6 +1241,7 @@ function seedDb() {
       annualLeaveEntitlement: 16,
       carriedForwardLeave: 0,
       birthdayLeaveEntitlement: 0,
+      unlimitedAnnualLeave: false,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2024-01-01",
       medicalClaimLimit: 500,
@@ -1252,6 +1263,7 @@ function seedDb() {
       annualLeaveEntitlement: 15,
       carriedForwardLeave: 0,
       birthdayLeaveEntitlement: 0,
+      unlimitedAnnualLeave: false,
       leavePolicyYear: currentLeaveYear(),
       serviceStartDate: "2025-01-01",
       medicalClaimLimit: 500,
@@ -2227,6 +2239,7 @@ function employeeChangeSet(db, before, after) {
     { key: "annualLeaveEntitlement", label: "annual leave days" },
     { key: "carriedForwardLeave", label: "carry forward leave" },
     { key: "birthdayLeaveEntitlement", label: "birthday leave" },
+    { key: "unlimitedAnnualLeave", label: "unlimited annual leave" },
     { key: "leaveEntitlement", label: "total leave entitlement" },
     { key: "medicalLeaveEntitlement", label: "medical leave entitlement" },
     { key: "medicalClaimLimit", label: "medical claim limit" },
@@ -2636,6 +2649,7 @@ async function createEmployee(db, body) {
   );
   const carriedForwardLeave = normalizeLeaveDays(body.carriedForwardLeave ?? 0, "Carry forward leave");
   const birthdayLeaveEntitlement = normalizeLeaveDays(body.birthdayLeaveEntitlement ?? 0, "Birthday leave");
+  const unlimitedAnnualLeave = booleanValue(body.unlimitedAnnualLeave);
   const medicalClaimLimit = Number(body.medicalClaimLimit ?? 500);
   const password = assertPassword(body.password || "welcome123", "Temporary password");
 
@@ -2670,6 +2684,7 @@ async function createEmployee(db, body) {
     annualLeaveEntitlement,
     carriedForwardLeave,
     birthdayLeaveEntitlement,
+    unlimitedAnnualLeave,
     leavePolicyYear,
     leaveEntitlement: normalizeLeaveDays(
       annualLeaveEntitlement + carriedForwardLeave + birthdayLeaveEntitlement,
@@ -2754,6 +2769,9 @@ function updateEmployee(db, employeeId, body) {
       "Birthday leave"
     );
     recomputeEmployeeLeaveEntitlement(db, employee);
+  }
+  if (body.unlimitedAnnualLeave !== undefined) {
+    employee.unlimitedAnnualLeave = booleanValue(body.unlimitedAnnualLeave);
   }
   if (body.leaveEntitlement !== undefined) {
     employee.leaveEntitlement = normalizeLeaveDays(body.leaveEntitlement, "Leave entitlement");
@@ -2929,7 +2947,7 @@ async function createLeaveRequest(db, user, body) {
     }
   } else {
     const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
-    if (days > summary.available) {
+    if (!user.unlimitedAnnualLeave && days > summary.available) {
       throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
     }
   }
@@ -3750,6 +3768,7 @@ module.exports = {
     cancelLeaveRequest,
     createClaim,
     createLeaveAdjustment,
+    createLeaveRequest,
     deliverQueuedEmails,
     limitSessionsForUser,
     medicalClaimsExport,

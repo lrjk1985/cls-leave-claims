@@ -375,6 +375,16 @@ button {
   gap: 7px;
 }
 
+.checkbox-field {
+  align-content: end;
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 22px;
+  min-height: 22px;
+  padding: 0;
+}
+
 .field.full {
   grid-column: 1 / -1;
 }

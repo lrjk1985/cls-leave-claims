@@ -15,6 +15,7 @@ create table if not exists public.cls_users (
   annual_leave_entitlement numeric(6, 2) not null default 0,
   carried_forward_leave numeric(6, 2) not null default 0,
   birthday_leave_entitlement numeric(6, 2) not null default 0,
+  unlimited_annual_leave boolean not null default false,
   leave_policy_year integer not null,
   leave_entitlement numeric(6, 2) not null default 0,
   leave_rollover_at timestamptz,
@@ -29,6 +30,9 @@ create table if not exists public.cls_users (
   constraint cls_users_no_self_manager check (id is distinct from manager_id),
   constraint cls_users_no_self_claim_approver check (id is distinct from claim_approver_id)
 );
+
+alter table public.cls_users
+  add column if not exists unlimited_annual_leave boolean not null default false;
 
 create table if not exists public.cls_leave_requests (
   id text primary key,

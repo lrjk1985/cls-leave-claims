@@ -624,6 +624,102 @@ test("updateEmployee rejects quarter-day carry forward and birthday leave", () =
   );
 });
 
+test("updateEmployee toggles unlimited annual leave", () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    unlimitedAnnualLeave: false
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    leaveAdjustments: []
+  };
+
+  assert.equal(__test.updateEmployee(db, "usr_employee", { unlimitedAnnualLeave: true }).unlimitedAnnualLeave, true);
+  assert.equal(__test.updateEmployee(db, "usr_employee", { unlimitedAnnualLeave: false }).unlimitedAnnualLeave, false);
+});
+
+test("createLeaveRequest lets unlimited annual leave exceed annual balance", async () => {
+  const manager = {
+    id: "usr_manager",
+    name: "Manager",
+    email: "manager@cls.local",
+    role: "manager"
+  };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    leaveEntitlement: 0,
+    annualLeaveEntitlement: 0,
+    carriedForwardLeave: 0,
+    birthdayLeaveEntitlement: 0,
+    unlimitedAnnualLeave: true
+  };
+  const db = {
+    users: [manager, employee],
+    leaveRequests: [],
+    emails: []
+  };
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Annual Leave",
+    startDate: "2026-06-02",
+    endDate: "2026-06-03",
+    reason: "Owner leave"
+  });
+
+  assert.equal(request.days, 2);
+  assert.equal(request.status, "pending");
+  assert.equal(db.leaveRequests.length, 1);
+  assert.equal(db.emails[0].recipientId, "usr_manager");
+});
+
+test("createLeaveRequest keeps medical leave capped for unlimited annual leave users", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    medicalLeaveEntitlement: 1,
+    unlimitedAnnualLeave: true
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [
+      {
+        id: "leave_medical_1",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        type: "Medical Leave",
+        startDate: "2026-06-02",
+        endDate: "2026-06-02",
+        days: 1,
+        leaveYear: 2026,
+        status: "approved"
+      }
+    ],
+    emails: []
+  };
+
+  await assert.rejects(
+    () => __test.createLeaveRequest(db, employee, {
+      type: "Medical Leave",
+      startDate: "2026-06-03",
+      endDate: "2026-06-03"
+    }),
+    /only 0 days are available/
+  );
+});
+
 test("createClaim routes claims to the separate claims approver", async () => {
   const employee = {
     id: "usr_employee",
@@ -826,6 +922,7 @@ test("Supabase table mappings round-trip core app records", () => {
       annualLeaveEntitlement: 14,
       carriedForwardLeave: 1,
       birthdayLeaveEntitlement: 1,
+      unlimitedAnnualLeave: true,
       leavePolicyYear: 2026,
       leaveEntitlement: 16,
       leaveRolloverAt: "2026-01-01T00:00:00.000Z",

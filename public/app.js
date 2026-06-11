@@ -159,6 +159,10 @@ function signedDays(value) {
   return `${days > 0 ? "+" : ""}${days}`;
 }
 
+function annualLeaveDisplay(value) {
+  return state.dashboard?.user?.unlimitedAnnualLeave ? "Unlimited" : value;
+}
+
 function showToast(message, type = "ok") {
   const old = document.querySelector(".toast");
   if (old) old.remove();
@@ -991,11 +995,11 @@ function renderMetrics() {
     <section class="metrics">
       <div class="metric">
         <div class="metric-label">Available Leave</div>
-        <div class="metric-value">${summary.available}</div>
+        <div class="metric-value">${annualLeaveDisplay(summary.available)}</div>
       </div>
       <div class="metric">
         <div class="metric-label">Yearly Allotment</div>
-        <div class="metric-value">${summary.entitlement}</div>
+        <div class="metric-value">${annualLeaveDisplay(summary.entitlement)}</div>
       </div>
       <div class="metric">
         <div class="metric-label">Carried Forward</div>
@@ -1486,6 +1490,7 @@ function employeeSearchText(employee) {
     `leave ${employee.annualLeaveEntitlement ?? employee.startingLeaveEntitlement} ${employee.leaveEntitlement}`,
     `carry forward ${employee.carriedForwardLeave ?? 0}`,
     `birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
+    employee.unlimitedAnnualLeave ? "unlimited annual leave" : "limited annual leave",
     `medical leave ${employee.medicalLeaveEntitlement ?? 14}`,
     `medical ${employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
@@ -1495,7 +1500,9 @@ function employeeSearchText(employee) {
 function employeeRowBody(row) {
   const body = {};
   row.querySelectorAll("[data-field]").forEach((field) => {
-    body[field.dataset.field] = field.dataset.field === "active"
+    body[field.dataset.field] = field.type === "checkbox"
+      ? field.checked
+      : field.dataset.field === "active"
       ? field.value === "true"
       : field.value;
   });
@@ -1594,6 +1601,10 @@ function renderEmployees() {
               <label for="employee-birthday-leave">Birthday Leave</label>
               <input id="employee-birthday-leave" name="birthdayLeaveEntitlement" type="number" min="0" step="0.5" value="0">
             </div>
+            <label class="field checkbox-field" for="employee-unlimited-annual-leave">
+              <span>Unlimited Annual Leave</span>
+              <input id="employee-unlimited-annual-leave" name="unlimitedAnnualLeave" type="checkbox">
+            </label>
             <div class="field">
               <label for="employee-medical-limit">Medical Claim Limit</label>
               <input id="employee-medical-limit" name="medicalClaimLimit" type="number" min="0" step="0.01" value="500">
@@ -1663,9 +1674,13 @@ function renderEmployees() {
                 <label>Birthday Leave</label>
                 <input data-field="birthdayLeaveEntitlement" type="number" min="0" step="0.5" value="${employee.birthdayLeaveEntitlement ?? 0}">
               </div>
+              <label class="field checkbox-field">
+                <span>Unlimited Annual Leave</span>
+                <input data-field="unlimitedAnnualLeave" type="checkbox" ${employee.unlimitedAnnualLeave ? "checked" : ""}>
+              </label>
               <div class="field">
                 <label>Current Total Leave</label>
-                <input type="number" value="${employee.leaveEntitlement}" disabled>
+                <input value="${employee.unlimitedAnnualLeave ? "Unlimited" : employee.leaveEntitlement}" disabled>
               </div>
               <div class="field">
                 <label>Medical Limit</label>

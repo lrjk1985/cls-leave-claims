@@ -22,6 +22,7 @@ Seeded local accounts:
 - Employees can change their own password after logging in
 - Leave balance shown after login
 - Admin can set the employee's initial annual leave days as the current annual leave amount
+- Admin can mark selected employees as having unlimited annual leave while keeping medical leave separate
 - Future service-anniversary increases can apply from the configured amount, without changing the initial setup value
 - Unused leave is carried forward into the next year on January 1
 - Saturdays, Sundays, and Singapore public holidays are excluded from leave deduction
