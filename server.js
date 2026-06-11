@@ -2703,7 +2703,7 @@ async function createEmployee(db, body) {
     recipientId: employee.id,
     type: "employee_created",
     subject: "CLS account created",
-    body: `Your CLS leave and claims account has been created. Your temporary local password is ${password}.`,
+    body: `Your CLS leave and claims account has been created. Your temporary password is ${password}.`,
     relatedId: employee.id
   });
   return employee;

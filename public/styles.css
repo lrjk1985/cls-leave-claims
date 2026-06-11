@@ -1,21 +1,32 @@
 :root {
   color-scheme: light;
-  --ink: #17212b;
-  --muted: #667085;
-  --line: #d8dee6;
+  --ink: #252436;
+  --muted: #747386;
+  --line: #e6dfd5;
   --paper: #ffffff;
-  --wash: #f4f7f5;
-  --nav: #13283a;
-  --nav-2: #1f4057;
-  --green: #0d7a66;
-  --green-2: #e2f3ee;
-  --amber: #b7791f;
-  --amber-2: #fff3d6;
-  --red: #b43b3b;
-  --red-2: #fde7e7;
-  --blue: #2266a5;
-  --blue-2: #e6f0fb;
-  --shadow: 0 12px 30px rgba(17, 24, 39, 0.08);
+  --wash: #fff0df;
+  --nav: rgba(255, 255, 255, 0.74);
+  --nav-2: #ffffff;
+  --primary: #5d7cfa;
+  --primary-dark: #4865d9;
+  --primary-soft: #eef4ff;
+  --accent: #ff8a5b;
+  --accent-dark: #e86f45;
+  --accent-soft: #ffece0;
+  --green: #4169e1;
+  --green-2: #eef4ff;
+  --amber: #a96f10;
+  --amber-2: #fff2bf;
+  --red: #d95f76;
+  --red-2: #fde9ee;
+  --blue: #4865d9;
+  --blue-2: #eef4ff;
+  --grey-2: #f1eef0;
+  --page-gradient: linear-gradient(135deg, #ffe3c7 0%, #fff0df 34%, #fff3a8 72%, #eaf8ff 100%);
+  --brand-gradient: linear-gradient(135deg, #ff8a5b 0%, #5d7cfa 100%);
+  --button-gradient: linear-gradient(135deg, #ff8a5b 0%, #5d7cfa 100%);
+  --button-gradient-hover: linear-gradient(135deg, #e86f45 0%, #4865d9 100%);
+  --shadow: 0 18px 42px rgba(58, 49, 84, 0.1);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -25,8 +36,10 @@
 
 body {
   margin: 0;
-  background: var(--wash);
+  background: var(--page-gradient);
   color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 button,
@@ -53,14 +66,16 @@ button {
   display: grid;
   grid-template-columns: 0.9fr 1.1fr;
   min-height: 560px;
-  background: var(--paper);
+  background: rgba(255, 255, 255, 0.9);
   box-shadow: var(--shadow);
   border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .login-panel {
-  background: var(--nav);
-  color: #f8fbff;
+  background: var(--brand-gradient);
+  color: #fff;
   padding: 42px;
   display: flex;
   flex-direction: column;
@@ -80,8 +95,8 @@ button {
   display: grid;
   place-items: center;
   border-radius: 8px;
-  background: #f8fbff;
-  color: var(--nav);
+  background: var(--brand-gradient);
+  color: #fff;
   font-weight: 800;
   letter-spacing: 0;
 }
@@ -98,7 +113,7 @@ button {
 .login-card p {
   margin: 0;
   line-height: 1.6;
-  color: rgba(248, 251, 255, 0.78);
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .login-card p {
@@ -113,11 +128,13 @@ button {
 
 .sidebar {
   background: var(--nav);
-  color: #eef5f8;
+  color: var(--ink);
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 24px;
+  border-right: 1px solid var(--line);
+  backdrop-filter: blur(18px);
 }
 
 .sidebar .brand {
@@ -137,15 +154,16 @@ button {
 }
 
 .brand-subtitle {
-  color: rgba(238, 245, 248, 0.66);
+  color: var(--muted);
   font-size: 13px;
   margin-top: 3px;
 }
 
 .profile-strip {
-  border-top: 1px solid rgba(255, 255, 255, 0.14);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  padding: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
 .profile-name {
@@ -153,7 +171,7 @@ button {
 }
 
 .profile-email {
-  color: rgba(238, 245, 248, 0.68);
+  color: var(--muted);
   font-size: 13px;
   margin-top: 4px;
   overflow-wrap: anywhere;
@@ -165,12 +183,13 @@ button {
   min-height: 28px;
   margin-top: 12px;
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: #ffe8d2;
+  border: 1px solid #ffd6b8;
   border-radius: 999px;
-  color: #fff;
+  color: var(--ink);
   font-size: 12px;
   text-transform: uppercase;
+  font-weight: 800;
 }
 
 .nav-list {
@@ -185,17 +204,19 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  color: rgba(238, 245, 248, 0.8);
+  color: var(--ink);
   background: transparent;
   border-radius: 8px;
   cursor: pointer;
   text-align: left;
+  font-weight: 750;
 }
 
 .nav-button:hover,
 .nav-button.active {
-  color: #fff;
+  color: var(--primary-dark);
   background: var(--nav-2);
+  box-shadow: 0 8px 20px rgba(50, 68, 64, 0.06);
 }
 
 .badge {
@@ -205,7 +226,7 @@ button {
   place-items: center;
   padding: 0 8px;
   border-radius: 999px;
-  background: #f3c05a;
+  background: #fff3a8;
   color: #312006;
   font-size: 12px;
   font-weight: 800;
@@ -248,10 +269,11 @@ button {
 
 .metric {
   min-height: 112px;
-  background: var(--paper);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 18px;
+  box-shadow: var(--shadow);
 }
 
 .metric-label {
@@ -288,10 +310,10 @@ button {
 }
 
 .section {
-  background: var(--paper);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--line);
   border-radius: 8px;
-  box-shadow: 0 8px 20px rgba(17, 24, 39, 0.04);
+  box-shadow: var(--shadow);
 }
 
 .section-header {
@@ -301,6 +323,7 @@ button {
   gap: 12px;
   padding: 18px 20px;
   border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .section-title {
@@ -405,7 +428,7 @@ select,
 textarea {
   width: 100%;
   min-height: 42px;
-  border: 1px solid #cfd6df;
+  border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   padding: 9px 11px;
@@ -420,8 +443,8 @@ textarea {
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 3px solid rgba(13, 122, 102, 0.16);
-  border-color: var(--green);
+  outline: 3px solid rgba(255, 138, 91, 0.2);
+  border-color: var(--accent);
 }
 
 .actions {
@@ -439,26 +462,34 @@ textarea:focus {
   gap: 8px;
   padding: 10px 14px;
   border-radius: 8px;
-  background: #e8edf2;
+  border: 1px solid var(--line);
+  background: #fff;
   color: var(--ink);
   font-weight: 800;
   cursor: pointer;
 }
 
 .button.primary {
-  background: var(--green);
+  border-color: transparent;
+  background: var(--button-gradient);
   color: #fff;
+  box-shadow: 0 10px 20px rgba(93, 124, 250, 0.18);
+}
+
+.button.primary:hover {
+  background: var(--button-gradient-hover);
 }
 
 .button.reject {
+  border-color: var(--red-2);
   background: var(--red-2);
   color: var(--red);
 }
 
 .button.ghost {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.36);
   color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--line);
 }
 
 .button.small {
@@ -480,7 +511,7 @@ textarea:focus {
 }
 
 .icon-button:hover {
-  background: #eef2f5;
+  background: var(--primary-soft);
   color: var(--ink);
 }
 
@@ -517,7 +548,7 @@ th {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0;
-  background: #f8faf9;
+  background: rgba(255, 255, 255, 0.62);
 }
 
 tr:last-child td {
@@ -552,7 +583,7 @@ tr:last-child td {
 
 .status.cancelled {
   color: var(--muted);
-  background: #eef2f5;
+  background: var(--grey-2);
 }
 
 .muted {
@@ -601,7 +632,7 @@ tr:last-child td {
   max-width: min(420px, calc(100vw - 44px));
   padding: 14px 16px;
   border-radius: 8px;
-  background: var(--ink);
+  background: #252436;
   color: #fff;
   box-shadow: var(--shadow);
   z-index: 10;
@@ -618,14 +649,14 @@ tr:last-child td {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(19, 40, 58, 0.46);
+  background: rgba(37, 36, 54, 0.34);
 }
 
 .modal {
   width: min(460px, 100%);
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--paper);
+  background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow);
   overflow: hidden;
 }
@@ -689,6 +720,19 @@ tr:last-child td {
   min-width: 0;
 }
 
+.decision-box .actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  width: min(132px, 100%);
+  max-width: 132px;
+  gap: 8px;
+}
+
+.decision-box .button {
+  width: 100%;
+  white-space: nowrap;
+}
+
 .leave-row-actions {
   margin-top: 8px;
 }
@@ -706,7 +750,7 @@ tr:last-child td {
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .employee-row:last-child {
@@ -764,7 +808,7 @@ tr:last-child td {
 }
 
 .action-menu[open] summary {
-  background: #dfe7ec;
+  background: var(--primary-soft);
 }
 
 .action-menu-list {
@@ -778,7 +822,7 @@ tr:last-child td {
   padding: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: rgba(255, 255, 255, 0.98);
   box-shadow: var(--shadow);
 }
 
@@ -789,7 +833,7 @@ tr:last-child td {
 }
 
 .action-menu-list .button:hover {
-  background: #eef2f5;
+  background: var(--primary-soft);
 }
 
 @media (max-width: 980px) {
