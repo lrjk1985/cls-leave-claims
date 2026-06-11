@@ -49,7 +49,8 @@ const state = {
   },
   leaveAdjustment: {
     employeeId: null
-  }
+  },
+  sidebarQuote: null
 };
 
 const app = document.querySelector("#app");
@@ -69,6 +70,172 @@ const RECEIPT_MIME_TYPES = new Set([
   "image/heif"
 ]);
 const RECEIPT_EXTENSIONS = new Set([".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
+const INSPIRATIONAL_QUOTES = [
+  {
+    text: "Trust thyself: every heart vibrates to that iron string.",
+    author: "Ralph Waldo Emerson",
+    source: "Essays"
+  },
+  {
+    text: "Simplify, simplify.",
+    author: "Henry David Thoreau",
+    source: "Walden"
+  },
+  {
+    text: "The best kind of revenge is, not to become like unto them.",
+    author: "Marcus Aurelius",
+    source: "Meditations"
+  },
+  {
+    text: "Resolve to perform what you ought; perform without fail what you resolve.",
+    author: "Benjamin Franklin",
+    source: "Autobiography"
+  },
+  {
+    text: "The beginning is the most important part of any work.",
+    author: "Plato",
+    source: "The Republic"
+  },
+  {
+    text: "Men are disturbed not by things, but by the views which they take of things.",
+    author: "Epictetus",
+    source: "The Enchiridion"
+  },
+  {
+    text: "The highest excellence is like that of water.",
+    author: "Laozi",
+    source: "Tao Teh King"
+  },
+  {
+    text: "Knowledge can be conveyed, but not wisdom.",
+    author: "Hermann Hesse",
+    source: "Siddhartha"
+  },
+  {
+    text: "I am not afraid of storms, for I am learning how to sail my ship.",
+    author: "Louisa May Alcott",
+    source: "Little Women"
+  },
+  {
+    text: "Think only of the past as its remembrance gives you pleasure.",
+    author: "Jane Austen",
+    source: "Pride and Prejudice"
+  },
+  {
+    text: "Nothing contributes so much to tranquillise the mind as a steady purpose.",
+    author: "Mary Wollstonecraft Shelley",
+    source: "Frankenstein"
+  },
+  {
+    text: "I will honour Christmas in my heart, and try to keep it all the year.",
+    author: "Charles Dickens",
+    source: "A Christmas Carol"
+  },
+  {
+    text: "Begin at the beginning, and go on till you come to the end: then stop.",
+    author: "Lewis Carroll",
+    source: "Alice's Adventures in Wonderland"
+  },
+  {
+    text: "In the midst of difficulties we are always ready to seize an advantage.",
+    author: "Sun Tzu",
+    source: "The Art of War"
+  },
+  {
+    text: "There is nothing more difficult to take in hand than to take the lead in a new order of things.",
+    author: "Niccolo Machiavelli",
+    source: "The Prince"
+  },
+  {
+    text: "She stopped worrying and resolved to wait calmly and see what the future would bring.",
+    author: "L. Frank Baum",
+    source: "The Wonderful Wizard of Oz"
+  },
+  {
+    text: "The Vision that you glorify in your mind, the Ideal that you enthrone in your heart, this you will become.",
+    author: "James Allen",
+    source: "As a Man Thinketh"
+  },
+  {
+    text: "The strength of the effort is the measure of the result.",
+    author: "James Allen",
+    source: "As a Man Thinketh"
+  },
+  {
+    text: "Calmness of mind is one of the beautiful jewels of wisdom.",
+    author: "James Allen",
+    source: "As a Man Thinketh"
+  },
+  {
+    text: "Let all your things have their places; let each part of your business have its time.",
+    author: "Benjamin Franklin",
+    source: "Autobiography"
+  },
+  {
+    text: "Speak not but what may benefit others or yourself.",
+    author: "Benjamin Franklin",
+    source: "Autobiography"
+  },
+  {
+    text: "Make no expense but to do good to others or yourself.",
+    author: "Benjamin Franklin",
+    source: "Autobiography"
+  },
+  {
+    text: "If words of command are not clear and distinct, the general is to blame.",
+    author: "Sun Tzu",
+    source: "The Art of War"
+  },
+  {
+    text: "The work is accomplished, and there is no resting in it.",
+    author: "Laozi",
+    source: "Tao Teh King"
+  },
+  {
+    text: "The excellence of water appears in its benefiting all things.",
+    author: "Laozi",
+    source: "Tao Teh King"
+  },
+  {
+    text: "Your inner being guard, and keep it free.",
+    author: "Laozi",
+    source: "Tao Teh King"
+  },
+  {
+    text: "The more tranquil a man becomes, the greater is his success, his influence, his power for good.",
+    author: "James Allen",
+    source: "As a Man Thinketh"
+  },
+  {
+    text: "Do all things as becometh the disciple of Antoninus Pius.",
+    author: "Marcus Aurelius",
+    source: "Meditations"
+  },
+  {
+    text: "Let this be thy only joy, from one sociable kind action to pass unto another.",
+    author: "Marcus Aurelius",
+    source: "Meditations"
+  },
+  {
+    text: "I will be cool, persevering, and prudent.",
+    author: "Mary Wollstonecraft Shelley",
+    source: "Frankenstein"
+  }
+];
+
+function randomQuote() {
+  return INSPIRATIONAL_QUOTES[Math.floor(Math.random() * INSPIRATIONAL_QUOTES.length)];
+}
+
+function renderQuote(quote, className = "") {
+  if (!quote) return "";
+  return `
+    <figure class="quote-block ${className}">
+      <blockquote>&quot;${escapeHtml(quote.text)}&quot;</blockquote>
+      <figcaption>- ${escapeHtml(quote.author)}</figcaption>
+    </figure>
+  `;
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -814,6 +981,7 @@ async function claimFormPayload(form, body) {
 }
 
 function renderLogin() {
+  const quote = randomQuote();
   app.innerHTML = `
     <main class="login-page">
       <section class="login-shell">
@@ -821,9 +989,9 @@ function renderLogin() {
           <div>
             <div class="brand-mark">CLS</div>
             <h1>Leave & Claims</h1>
-            <p>Employee leave applications, direct report approvals, medical claims, and admin setup for CLS.</p>
+            <p>Welcome to the Chye Lee & Sons Leave & Claims System.</p>
           </div>
-          <p>Company portal</p>
+          ${renderQuote(quote, "login-quote")}
         </div>
         <form class="login-card" data-form="login">
           <h2>Sign in</h2>
@@ -857,6 +1025,7 @@ function renderNavButton(id, label, badge = "") {
 function renderShell(content) {
   const { user } = state.dashboard;
   const approvals = pendingApprovalCount();
+  if (!state.sidebarQuote) state.sidebarQuote = randomQuote();
   app.innerHTML = `
     <div class="app-shell">
       <aside class="sidebar">
@@ -882,6 +1051,7 @@ function renderShell(content) {
           ${renderNavButton("account", "Account")}
           ${renderNavButton("mail", "Email Outbox")}
         </nav>
+        ${renderQuote(state.sidebarQuote, "sidebar-quote")}
         <button class="button ghost" data-action="logout">Sign out</button>
       </aside>
       <main class="main">
@@ -2041,6 +2211,7 @@ document.addEventListener("click", async (event) => {
         await api("/api/logout", { method: "POST", body: "{}" });
         state.dashboard = null;
         state.activeTab = "overview";
+        state.sidebarQuote = null;
         render();
       });
       return;

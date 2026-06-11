@@ -120,6 +120,34 @@ button {
   color: var(--muted);
 }
 
+.quote-block {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.quote-block blockquote {
+  margin: 0;
+}
+
+.quote-block figcaption {
+  color: inherit;
+  font-weight: 700;
+}
+
+.login-quote {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.sidebar-quote {
+  margin-top: auto;
+  padding-top: 10px;
+  color: var(--muted);
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
