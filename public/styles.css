@@ -554,6 +554,87 @@ button {
   color: #8c8798;
 }
 
+.management-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(420px, 0.9fr);
+  gap: 18px;
+  min-height: 220px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(24, 23, 28, 0.18), rgba(24, 23, 28, 0.74)),
+    radial-gradient(circle at 15% 20%, rgba(94, 232, 214, 0.58), transparent 28%),
+    radial-gradient(circle at 84% 16%, rgba(255, 95, 200, 0.58), transparent 30%),
+    radial-gradient(circle at 72% 88%, rgba(93, 124, 250, 0.76), transparent 34%),
+    #18171c;
+  color: #fff;
+  box-shadow: 0 22px 44px rgba(24, 23, 28, 0.2);
+}
+
+.management-kicker {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.management-hero h2 {
+  max-width: 620px;
+  margin: 8px 0;
+  font-size: 34px;
+  line-height: 1.12;
+}
+
+.management-hero p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.management-hero-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-self: end;
+}
+
+.management-stat {
+  min-width: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.management-stat strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 24px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.management-stat span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.management-ring-grid .feature-ring-card {
+  min-height: 116px;
+}
+
+.management-section .section-header {
+  align-items: flex-start;
+  background:
+    linear-gradient(90deg, rgba(255, 138, 91, 0.12), rgba(93, 124, 250, 0.1)),
+    rgba(255, 255, 255, 0.72);
+}
+
+.management-section .table-wrap {
+  border-radius: 0 0 8px 8px;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1132,6 +1213,7 @@ tr:last-child td {
 @media (max-width: 980px) {
   .app-shell,
   .login-shell,
+  .management-hero,
   .split {
     grid-template-columns: 1fr;
   }
@@ -1144,6 +1226,7 @@ tr:last-child td {
   .detail-grid,
   .employee-leave-stats,
   .employee-balance-grid,
+  .management-hero-stats,
   .form-grid,
   .form-grid.three {
     grid-template-columns: 1fr 1fr;
@@ -1173,6 +1256,7 @@ tr:last-child td {
   .detail-grid,
   .employee-leave-stats,
   .employee-balance-grid,
+  .management-hero-stats,
   .form-grid,
   .form-grid.three {
     grid-template-columns: 1fr;
@@ -1188,6 +1272,10 @@ tr:last-child td {
 
   .feature-ring-card {
     grid-template-columns: 78px minmax(0, 1fr);
+  }
+
+  .management-hero h2 {
+    font-size: 26px;
   }
 
   .employee-leave-hero {

@@ -1451,6 +1451,113 @@ function renderClaimPageRings() {
   `;
 }
 
+function renderManagementOverviewHero(pendingLeaves, pendingClaims) {
+  const { user } = state.dashboard;
+  const totalPending = pendingLeaves.length + pendingClaims.length;
+  const teamCount = user.role === "admin"
+    ? (state.dashboard.allEmployees || []).filter((employee) => employee.active !== false).length
+    : (state.dashboard.teamMembers || []).length;
+  const storage = state.dashboard.receiptStorageSummary;
+
+  return `
+    <section class="management-hero">
+      <div>
+        <div class="management-kicker">${user.role === "admin" ? "Admin command view" : "Direct report queue"}</div>
+        <h2>${totalPending ? `${totalPending} item${totalPending === 1 ? "" : "s"} need attention` : "Everything is clear"}</h2>
+        <p>${totalPending ? "Review leave applications and claims from your team." : "No pending approvals in your queue right now."}</p>
+      </div>
+      <div class="management-hero-stats">
+        <div class="management-stat">
+          <strong>${pendingLeaves.length}</strong>
+          <span>Leave approvals</span>
+        </div>
+        <div class="management-stat">
+          <strong>${pendingClaims.length}</strong>
+          <span>Claim approvals</span>
+        </div>
+        <div class="management-stat">
+          <strong>${teamCount}</strong>
+          <span>${user.role === "admin" ? "Active employees" : "Team members"}</span>
+        </div>
+        <div class="management-stat">
+          <strong>${storage ? fileSize(storage.activeBytes) : "-"}</strong>
+          <span>${storage ? "Receipt storage" : "Admin only"}</span>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderManagementOverviewRings(pendingLeaves, pendingClaims) {
+  const totalPending = pendingLeaves.length + pendingClaims.length;
+  const teamCount = state.dashboard.user.role === "admin"
+    ? (state.dashboard.allEmployees || []).filter((employee) => employee.active !== false).length
+    : (state.dashboard.teamMembers || []).length;
+  const storage = state.dashboard.receiptStorageSummary;
+
+  return `
+    <section class="feature-balance-grid management-ring-grid">
+      ${featureRingCard({
+        title: "Pending Leave",
+        value: String(pendingLeaves.length),
+        text: "Applications awaiting review",
+        percent: totalPending ? percentage(pendingLeaves.length, totalPending) : 0,
+        gradient: "#ff5fc8, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Pending Claims",
+        value: String(pendingClaims.length),
+        text: "Claims awaiting review",
+        percent: totalPending ? percentage(pendingClaims.length, totalPending) : 0,
+        gradient: "#5ee8d6, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: state.dashboard.user.role === "admin" ? "Employees" : "Team",
+        value: String(teamCount),
+        text: state.dashboard.user.role === "admin" ? "Active employee records" : "Assigned direct reports",
+        percent: teamCount ? 100 : 0,
+        gradient: "#ffbd3d, #ff7b68"
+      })}
+      ${featureRingCard({
+        title: "Receipt Storage",
+        value: storage ? fileSize(storage.activeBytes) : "-",
+        text: storage ? `${storage.activeReceiptCount} active receipts` : "Visible to admins",
+        percent: storage?.activeReceiptCount ? 100 : 0,
+        gradient: "#ff8a5b, #ff5fc8"
+      })}
+    </section>
+  `;
+}
+
+function renderApprovalSummary(leave, claims) {
+  const total = leave.length + claims.length;
+  return `
+    <section class="feature-balance-grid management-ring-grid">
+      ${featureRingCard({
+        title: "Leave Queue",
+        value: String(leave.length),
+        text: "Pending leave decisions",
+        percent: total ? percentage(leave.length, total) : 0,
+        gradient: "#ff5fc8, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Claims Queue",
+        value: String(claims.length),
+        text: "Pending claim decisions",
+        percent: total ? percentage(claims.length, total) : 0,
+        gradient: "#5ee8d6, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Total Pending",
+        value: String(total),
+        text: total ? "Items awaiting action" : "Queue is clear",
+        percent: total ? 100 : 0,
+        gradient: "#ffbd3d, #ff7b68"
+      })}
+    </section>
+  `;
+}
+
 function renderAdminReceiptStorage() {
   const summary = state.dashboard.receiptStorageSummary;
   if (!isAdmin() || !summary) return "";
@@ -1517,20 +1624,26 @@ function renderOverview() {
   renderShell(`
     ${renderTopbar("Overview", "Leave balances, pending approvals, and recent activity.")}
     <div class="content-grid">
-      ${renderEmployeeLeaveHero()}
-      ${renderMetrics()}
+      ${renderManagementOverviewHero(pendingLeaves, pendingClaims)}
+      ${renderManagementOverviewRings(pendingLeaves, pendingClaims)}
       ${renderAdminReceiptStorage()}
       <div class="split">
-        <section class="section">
+        <section class="section management-section">
           <div class="section-header">
-            <h2 class="section-title">Pending Leave Requests</h2>
+            <div>
+              <h2 class="section-title">Pending Leave Requests</h2>
+              <p class="page-kicker">Review team leave requests quickly.</p>
+            </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
           ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, true) : `<div class="empty">No pending leave requests.</div>`}
         </section>
-        <section class="section">
+        <section class="section management-section">
           <div class="section-header">
-            <h2 class="section-title">Pending Claims</h2>
+            <div>
+              <h2 class="section-title">Pending Claims</h2>
+              <p class="page-kicker">Claims routed to you for approval.</p>
+            </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
           ${pendingClaims.length ? renderClaimsTable(pendingClaims, true) : `<div class="empty">No pending medical claims.</div>`}
@@ -1710,15 +1823,22 @@ function renderApprovals() {
   renderShell(`
     ${renderTopbar("Approvals", "Pending leave applications and medical claims from employees.")}
     <div class="content-grid">
-      <section class="section">
+      ${renderApprovalSummary(leave, claims)}
+      <section class="section management-section">
         <div class="section-header">
-          <h2 class="section-title">Leave Applications</h2>
+          <div>
+            <h2 class="section-title">Leave Applications</h2>
+            <p class="page-kicker">Approve or not approve pending leave.</p>
+          </div>
         </div>
         ${leave.length ? renderLeaveTable(leave, true) : `<div class="empty">No leave applications are pending.</div>`}
       </section>
-      <section class="section">
+      <section class="section management-section">
         <div class="section-header">
-          <h2 class="section-title">Claims</h2>
+          <div>
+            <h2 class="section-title">Claims</h2>
+            <p class="page-kicker">Review receipts, notes, and claim amounts.</p>
+          </div>
         </div>
         ${claims.length ? renderClaimsTable(claims, true) : `<div class="empty">No medical claims are pending.</div>`}
       </section>
