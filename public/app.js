@@ -1199,6 +1199,258 @@ function renderMetrics() {
   `;
 }
 
+function renderEmployeeLeaveHero() {
+  const { user, leaveSummary: summary } = state.dashboard;
+  if (user.role !== "employee" || !summary) return "";
+
+  const isUnlimited = Boolean(user.unlimitedAnnualLeave);
+  const availableLabel = annualLeaveDisplay(summary.available);
+  const helperText = isUnlimited
+    ? "Annual and urgent leave can be requested without a balance limit."
+    : "Working days ready to use.";
+
+  return `
+    <section class="employee-leave-hero">
+      <div class="employee-leave-hero-content">
+        <div>
+          <div class="employee-leave-kicker">Available annual leave</div>
+          <div class="employee-leave-value">${availableLabel}</div>
+          <p>${helperText}</p>
+        </div>
+        <div class="employee-leave-stats">
+          <div class="employee-leave-stat">
+            <strong>${isUnlimited ? "Unlimited" : summary.baseEntitlement}</strong>
+            <span>Yearly allotment</span>
+          </div>
+          <div class="employee-leave-stat">
+            <strong>${summary.carriedForward}</strong>
+            <span>Carried forward</span>
+          </div>
+          <div class="employee-leave-stat">
+            <strong>${summary.birthdayLeave}</strong>
+            <span>Birthday leave</span>
+          </div>
+          <div class="employee-leave-stat">
+            <strong>${summary.approved} / ${summary.pending}</strong>
+            <span>Taken / pending</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function percentage(numerator, denominator) {
+  const total = Number(denominator || 0);
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((Number(numerator || 0) / total) * 100)));
+}
+
+function renderEmployeeBalanceRings() {
+  const summary = state.dashboard.leaveSummary;
+  const medicalSummary = state.dashboard.medicalLeaveSummary || {
+    entitlement: 14,
+    available: 14,
+    pending: 0,
+    approved: 0
+  };
+  const claimSummary = state.dashboard.medicalClaimSummary || {
+    limit: 0,
+    available: 0,
+    pending: 0,
+    approved: 0
+  };
+  const annualPercent = state.dashboard.user.unlimitedAnnualLeave
+    ? 100
+    : percentage(summary.available, summary.entitlement);
+  const medicalPercent = percentage(medicalSummary.available, medicalSummary.entitlement);
+  const claimPercent = percentage(claimSummary.available, claimSummary.limit);
+
+  return `
+    <section class="employee-balance-grid">
+      <article class="employee-ring-card">
+        <div class="employee-ring" style="--value: ${annualPercent}%; --ring-gradient: #ff5fc8, #5d7cfa;">
+          <strong>${state.dashboard.user.unlimitedAnnualLeave ? "Open" : `${annualPercent}%`}</strong>
+        </div>
+        <div>
+          <h2>Annual Leave</h2>
+          <p class="muted">${state.dashboard.user.unlimitedAnnualLeave ? "Unlimited balance" : `${summary.available} days available`}</p>
+        </div>
+      </article>
+      <article class="employee-ring-card">
+        <div class="employee-ring" style="--value: ${medicalPercent}%; --ring-gradient: #5ee8d6, #5d7cfa;">
+          <strong>${medicalPercent}%</strong>
+        </div>
+        <div>
+          <h2>Medical Leave</h2>
+          <p class="muted">${medicalSummary.available} / ${medicalSummary.entitlement} days remaining</p>
+        </div>
+      </article>
+      <article class="employee-ring-card">
+        <div class="employee-ring" style="--value: ${claimPercent}%; --ring-gradient: #ffbd3d, #ff7b68;">
+          <strong>${claimPercent}%</strong>
+        </div>
+        <div>
+          <h2>Medical Claims</h2>
+          <p class="muted">${money(claimSummary.available)} balance remaining</p>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
+function employeeRecentRequests() {
+  const userId = state.dashboard.user.id;
+  const leaveItems = state.dashboard.leaveRequests
+    .filter((item) => item.employeeId === userId)
+    .map((item) => ({
+      id: `leave-${item.id}`,
+      status: item.status,
+      dateKey: item.createdAt || item.startDate,
+      kind: item.type,
+      title: item.startDate === item.endDate
+        ? dateText(item.startDate)
+        : `${dateText(item.startDate)} to ${dateText(item.endDate)}`,
+      meta: `${item.days} working day${Number(item.days) === 1 ? "" : "s"}${item.reason ? ` - ${item.reason}` : ""}`
+    }));
+  const claimItems = state.dashboard.medicalClaims
+    .filter((item) => item.employeeId === userId)
+    .map((item) => ({
+      id: `claim-${item.id}`,
+      status: item.status,
+      dateKey: item.createdAt || item.claimDate,
+      kind: claimTypeLabel(item.claimType),
+      title: item.provider || claimTypeLabel(item.claimType),
+      meta: `${money(item.amount)} - ${item.description || item.category || "Claim"}`
+    }));
+
+  return [...leaveItems, ...claimItems]
+    .sort((left, right) => String(right.dateKey || "").localeCompare(String(left.dateKey || "")))
+    .slice(0, 5);
+}
+
+function renderEmployeeRecentRequests() {
+  const items = employeeRecentRequests();
+  return `
+    <section class="section employee-recent-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">My Active Requests</h2>
+          <p class="page-kicker">Pending leave and claims without another long table.</p>
+        </div>
+      </div>
+      ${items.length ? `
+        <div class="employee-request-list">
+          ${items.map((item) => `
+            <article class="employee-request-card">
+              <div>
+                <span class="employee-request-kind">${escapeHtml(item.kind)}</span>
+                <h3>${escapeHtml(item.title)}</h3>
+                <p class="muted">${escapeHtml(item.meta)}</p>
+              </div>
+              ${statusPill(item.status)}
+            </article>
+          `).join("")}
+        </div>
+      ` : `<div class="empty">No active leave or claim requests.</div>`}
+    </section>
+  `;
+}
+
+function featureRingCard({ title, value, text, percent, gradient }) {
+  return `
+    <article class="feature-ring-card">
+      <div class="feature-ring" style="--value: ${percent}%; --ring-gradient: ${gradient};">
+        <strong>${escapeHtml(value)}</strong>
+      </div>
+      <div>
+        <h2>${escapeHtml(title)}</h2>
+        <p class="muted">${escapeHtml(text)}</p>
+      </div>
+    </article>
+  `;
+}
+
+function renderLeavePageRings() {
+  const summary = state.dashboard.leaveSummary;
+  const medicalSummary = state.dashboard.medicalLeaveSummary || {
+    entitlement: 14,
+    available: 14,
+    pending: 0,
+    approved: 0
+  };
+  const isUnlimited = Boolean(state.dashboard.user.unlimitedAnnualLeave);
+  const annualPercent = isUnlimited ? 100 : percentage(summary.available, summary.entitlement);
+  const pendingPercent = isUnlimited ? 0 : percentage(summary.pending, summary.entitlement || summary.pending);
+  const medicalPercent = percentage(medicalSummary.available, medicalSummary.entitlement);
+
+  return `
+    <section class="feature-balance-grid">
+      ${featureRingCard({
+        title: "Annual Leave",
+        value: isUnlimited ? "Open" : `${annualPercent}%`,
+        text: isUnlimited ? "Unlimited annual leave" : `${summary.available} days available`,
+        percent: annualPercent,
+        gradient: "#ff5fc8, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Medical Leave",
+        value: `${medicalPercent}%`,
+        text: `${medicalSummary.available} / ${medicalSummary.entitlement} days remaining`,
+        percent: medicalPercent,
+        gradient: "#5ee8d6, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Leave Pending",
+        value: String(summary.pending),
+        text: `${summary.approved} days approved this year`,
+        percent: pendingPercent,
+        gradient: "#ffbd3d, #ff7b68"
+      })}
+    </section>
+  `;
+}
+
+function renderClaimPageRings() {
+  const summary = state.dashboard.medicalClaimSummary;
+  const generalSummary = state.dashboard.generalClaimSummary || { pending: 0, approved: 0 };
+  const availablePercent = percentage(summary.available, summary.limit);
+  const pendingPercent = percentage(summary.pending, summary.limit || summary.pending);
+
+  return `
+    <section class="feature-balance-grid">
+      ${featureRingCard({
+        title: "Medical Balance",
+        value: `${availablePercent}%`,
+        text: `${money(summary.available)} remaining`,
+        percent: availablePercent,
+        gradient: "#5ee8d6, #5d7cfa"
+      })}
+      ${featureRingCard({
+        title: "Medical Pending",
+        value: money(summary.pending),
+        text: `${money(summary.approved)} approved`,
+        percent: pendingPercent,
+        gradient: "#ffbd3d, #ff7b68"
+      })}
+      ${featureRingCard({
+        title: "Others Pending",
+        value: money(generalSummary.pending),
+        text: "No medical balance deduction",
+        percent: generalSummary.pending > 0 ? 100 : 0,
+        gradient: "#ff5fc8, #8a68ff"
+      })}
+      ${featureRingCard({
+        title: "Others Approved",
+        value: money(generalSummary.approved),
+        text: "General claims total",
+        percent: generalSummary.approved > 0 ? 100 : 0,
+        gradient: "#ff8a5b, #ff5fc8"
+      })}
+    </section>
+  `;
+}
+
 function renderAdminReceiptStorage() {
   const summary = state.dashboard.receiptStorageSummary;
   if (!isAdmin() || !summary) return "";
@@ -1236,12 +1488,36 @@ function renderAdminReceiptStorage() {
   `;
 }
 
+function renderEmployeeOverview() {
+  renderShell(`
+    ${renderTopbar("Overview", "Your leave, medical leave, and claims in one calm view.")}
+    <div class="content-grid">
+      ${renderEmployeeLeaveHero()}
+      ${renderEmployeeBalanceRings()}
+      ${renderEmployeeRecentRequests()}
+      <section class="section">
+        <div class="section-header">
+          <h2 class="section-title">Recent Notifications</h2>
+          <button class="button small" data-action="tab" data-tab="mail">Open outbox</button>
+        </div>
+        ${renderMailList(state.dashboard.emails.slice(0, 4))}
+      </section>
+    </div>
+  `);
+}
+
 function renderOverview() {
+  if (state.dashboard.user.role === "employee") {
+    renderEmployeeOverview();
+    return;
+  }
+
   const pendingLeaves = state.dashboard.leaveRequests.filter((item) => item.status === "pending" && isReviewer(item));
   const pendingClaims = state.dashboard.medicalClaims.filter((item) => item.status === "pending" && isReviewer(item));
   renderShell(`
     ${renderTopbar("Overview", "Leave balances, pending approvals, and recent activity.")}
     <div class="content-grid">
+      ${renderEmployeeLeaveHero()}
       ${renderMetrics()}
       ${renderAdminReceiptStorage()}
       <div class="split">
@@ -1277,10 +1553,13 @@ function renderLeave() {
   renderShell(`
     ${renderTopbar("Leave", "Apply for leave and track your leave request history.")}
     <div class="content-grid">
-      ${renderMetrics()}
-      <section class="section">
+      ${renderLeavePageRings()}
+      <section class="section feature-form-card">
         <div class="section-header">
-          <h2 class="section-title">New Leave Application</h2>
+          <div>
+            <h2 class="section-title">New Leave Application</h2>
+            <p class="page-kicker">Weekends and Singapore public holidays are excluded automatically.</p>
+          </div>
         </div>
         <div class="section-body">
           <form class="form-grid" data-form="leave">
@@ -1308,7 +1587,7 @@ function renderLeave() {
             </div>
             <div class="field full">
               <label for="leave-reason">Reason</label>
-              <textarea id="leave-reason" name="reason"></textarea>
+              <textarea id="leave-reason" name="reason" placeholder="Brief reason for this leave request"></textarea>
             </div>
             <div class="field full actions">
               <button class="button primary" type="submit">Submit Leave</button>
@@ -1368,36 +1647,14 @@ function renderClaims() {
   renderShell(`
     ${renderTopbar("Claims", "Submit medical and general claims and track approval status.")}
     <div class="content-grid">
-      <section class="metrics">
-        <div class="metric">
-          <div class="metric-label">Medical Claim Balance</div>
-          <div class="metric-value money-value">${money(summary.available)}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Medical Limit</div>
-          <div class="metric-value money-value">${money(summary.limit)}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Medical Pending</div>
-          <div class="metric-value money-value">${money(summary.pending)}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Medical Approved</div>
-          <div class="metric-value money-value">${money(summary.approved)}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Others Pending</div>
-          <div class="metric-value money-value">${money(generalSummary.pending)}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">Others Approved</div>
-          <div class="metric-value money-value">${money(generalSummary.approved)}</div>
-        </div>
-      </section>
+      ${renderClaimPageRings()}
       ${renderClaimsExportPanel()}
-      <section class="section">
+      <section class="section feature-form-card">
         <div class="section-header">
-          <h2 class="section-title">New Claim</h2>
+          <div>
+            <h2 class="section-title">New Claim</h2>
+            <p class="page-kicker">Medical claims use your medical balance. Others are tracked separately.</p>
+          </div>
         </div>
         <div class="section-body">
           <form class="form-grid three" data-form="claim">
@@ -1415,11 +1672,11 @@ function renderClaims() {
             </div>
             <div class="field">
               <label for="claim-amount">Amount</label>
-              <input id="claim-amount" name="amount" type="number" min="0.01" step="0.01" required>
+              <input id="claim-amount" name="amount" type="number" min="0.01" step="0.01" placeholder="0.00" required>
             </div>
             <div class="field">
               <label for="claim-provider">Clinic / Merchant</label>
-              <input id="claim-provider" name="provider" required>
+              <input id="claim-provider" name="provider" placeholder="Clinic or merchant name" required>
             </div>
             <div class="field">
               <label for="claim-receipt-file">Receipt Upload</label>
@@ -1428,7 +1685,7 @@ function renderClaims() {
             </div>
             <div class="field full">
               <label for="claim-description">Claim Explanation</label>
-              <textarea id="claim-description" name="description" required></textarea>
+              <textarea id="claim-description" name="description" placeholder="Explain what this claim is for" required></textarea>
             </div>
             <div class="field full actions">
               <button class="button primary" type="submit">Submit Claim</button>

@@ -288,6 +288,272 @@ button {
   gap: 18px;
 }
 
+.employee-leave-hero {
+  position: relative;
+  min-height: 310px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(24, 23, 28, 0.2), rgba(24, 23, 28, 0.76)),
+    radial-gradient(circle at 18% 22%, rgba(94, 232, 214, 0.82), transparent 28%),
+    radial-gradient(circle at 82% 18%, rgba(255, 95, 200, 0.78), transparent 30%),
+    radial-gradient(circle at 68% 82%, rgba(93, 124, 250, 0.92), transparent 34%),
+    #18171c;
+  color: #fff;
+  box-shadow: 0 22px 44px rgba(24, 23, 28, 0.2);
+}
+
+.employee-leave-hero-content {
+  position: relative;
+  z-index: 1;
+  min-height: inherit;
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.employee-leave-kicker {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.employee-leave-value {
+  margin-top: 8px;
+  font-size: 56px;
+  font-weight: 850;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.employee-leave-hero p {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.employee-leave-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-self: end;
+}
+
+.employee-leave-stat {
+  min-width: 0;
+  padding: 13px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.employee-leave-stat strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 18px;
+  font-weight: 850;
+  overflow-wrap: anywhere;
+}
+
+.employee-leave-stat span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+}
+
+.employee-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.employee-ring-card {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.employee-ring {
+  width: 78px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, #fff 0 57%, transparent 58%),
+    conic-gradient(var(--ring-gradient) var(--value), rgba(36, 35, 52, 0.08) 0);
+}
+
+.employee-ring strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 850;
+}
+
+.employee-ring-card h2,
+.employee-request-card h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.employee-ring-card p,
+.employee-request-card p {
+  margin: 5px 0 0;
+}
+
+.employee-request-list {
+  display: grid;
+  gap: 10px;
+}
+
+.employee-request-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.employee-request-kind {
+  display: inline-flex;
+  margin-bottom: 6px;
+  color: var(--primary-dark);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.feature-balance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.feature-ring-card {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.feature-ring {
+  width: 78px;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, #fff 0 57%, transparent 58%),
+    conic-gradient(var(--ring-gradient) var(--value), rgba(36, 35, 52, 0.08) 0);
+}
+
+.feature-ring strong {
+  max-width: 58px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.feature-ring-card h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.25;
+}
+
+.feature-ring-card p {
+  margin: 5px 0 0;
+}
+
+.feature-form-card {
+  overflow: hidden;
+  border-color: rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(24, 23, 28, 0.2), rgba(24, 23, 28, 0.78)),
+    radial-gradient(circle at 16% 18%, rgba(94, 232, 214, 0.64), transparent 28%),
+    radial-gradient(circle at 82% 14%, rgba(255, 95, 200, 0.62), transparent 30%),
+    radial-gradient(circle at 70% 90%, rgba(93, 124, 250, 0.72), transparent 34%),
+    #18171c;
+  color: #fff;
+  box-shadow: 0 22px 44px rgba(24, 23, 28, 0.2);
+}
+
+.feature-form-card .section-header {
+  margin: 20px 20px 0;
+  padding: 12px 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-left: 0;
+  border-right: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.feature-form-card .section-title,
+.feature-form-card label {
+  color: var(--ink);
+}
+
+.feature-form-card .page-kicker,
+.feature-form-card .field-hint {
+  color: var(--muted);
+}
+
+.feature-form-card .field:not(.actions) {
+  padding: 12px;
+  border: 1px solid #d8cfc4;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.feature-form-card .field label {
+  color: var(--ink);
+}
+
+.feature-form-card .field .field-hint {
+  color: var(--muted);
+}
+
+.feature-form-card input,
+.feature-form-card select,
+.feature-form-card textarea {
+  border-color: #a9a2b0;
+  box-shadow: inset 0 0 0 1px rgba(36, 35, 52, 0.04);
+  background: #fff;
+  color: var(--ink);
+  caret-color: var(--ink);
+}
+
+.feature-form-card input:focus,
+.feature-form-card select:focus,
+.feature-form-card textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 138, 91, 0.2);
+}
+
+.feature-form-card input::placeholder,
+.feature-form-card textarea::placeholder {
+  color: #8c8798;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -876,6 +1142,8 @@ tr:last-child td {
 
   .metrics,
   .detail-grid,
+  .employee-leave-stats,
+  .employee-balance-grid,
   .form-grid,
   .form-grid.three {
     grid-template-columns: 1fr 1fr;
@@ -895,16 +1163,39 @@ tr:last-child td {
   }
 
   .topbar,
-  .section-header {
+  .section-header,
+  .employee-request-card {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .metrics,
   .detail-grid,
+  .employee-leave-stats,
+  .employee-balance-grid,
   .form-grid,
   .form-grid.three {
     grid-template-columns: 1fr;
+  }
+
+  .employee-ring-card {
+    grid-template-columns: 78px minmax(0, 1fr);
+  }
+
+  .employee-request-card {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-ring-card {
+    grid-template-columns: 78px minmax(0, 1fr);
+  }
+
+  .employee-leave-hero {
+    min-height: 0;
+  }
+
+  .employee-leave-value {
+    font-size: 42px;
   }
 
   .table-wrap {
