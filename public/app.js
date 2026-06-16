@@ -70,6 +70,8 @@ const RECEIPT_MIME_TYPES = new Set([
   "image/heif"
 ]);
 const RECEIPT_EXTENSIONS = new Set([".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
+const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+let lastRenderedTab = null;
 const INSPIRATIONAL_QUOTES = [
   {
     text: "Trust thyself: every heart vibrates to that iron string.",
@@ -338,6 +340,106 @@ function showToast(message, type = "ok") {
   toast.textContent = message;
   document.body.append(toast);
   setTimeout(() => toast.remove(), 4200);
+}
+
+function shouldReduceMotion() {
+  return reducedMotionQuery.matches;
+}
+
+function animateElement(element, keyframes, options) {
+  if (!element || shouldReduceMotion() || !element.animate) return;
+  element.animate(keyframes, {
+    duration: 220,
+    easing: "cubic-bezier(.16, 1, .3, 1)",
+    fill: "both",
+    ...options
+  });
+}
+
+function staggerElements(elements, options = {}) {
+  if (shouldReduceMotion()) return;
+  [...elements].slice(0, options.limit || 24).forEach((element, index) => {
+    animateElement(
+      element,
+      [
+        { opacity: 0, transform: `translateY(${options.distance || 8}px)` },
+        { opacity: 1, transform: "translateY(0)" }
+      ],
+      {
+        duration: options.duration || 260,
+        delay: Math.min(index * (options.step || 24), options.maxDelay || 180)
+      }
+    );
+  });
+}
+
+function runPostRenderMotion({ viewChanged = false } = {}) {
+  if (shouldReduceMotion()) return;
+
+  requestAnimationFrame(() => {
+    const modalBackdrop = app.querySelector(".modal-backdrop");
+    if (modalBackdrop) {
+      animateElement(modalBackdrop, [{ opacity: 0 }, { opacity: 1 }], { duration: 180 });
+      animateElement(
+        modalBackdrop.querySelector(".modal"),
+        [
+          { opacity: 0, transform: "translateY(10px) scale(.985)" },
+          { opacity: 1, transform: "translateY(0) scale(1)" }
+        ],
+        { duration: 260 }
+      );
+    }
+
+    if (viewChanged) {
+      staggerElements(app.querySelectorAll(".login-shell, .topbar, .content-grid > *"), {
+        distance: 10,
+        duration: 300,
+        step: 36,
+        limit: 18,
+        maxDelay: 220
+      });
+    }
+
+    staggerElements(app.querySelectorAll("tbody tr, .employee-row, .employee-request-card, .mail-item, .empty"), {
+      distance: 6,
+      duration: 220,
+      step: 18,
+      limit: 28,
+      maxDelay: 140
+    });
+  });
+}
+
+async function animateDialogClose() {
+  const modalBackdrop = app.querySelector(".modal-backdrop");
+  const modal = modalBackdrop?.querySelector(".modal");
+  if (!modalBackdrop || shouldReduceMotion() || !modalBackdrop.animate) return;
+
+  const animations = [
+    modalBackdrop.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 150,
+      easing: "cubic-bezier(.2, 0, 0, 1)",
+      fill: "forwards"
+    })
+  ];
+
+  if (modal?.animate) {
+    animations.push(
+      modal.animate(
+        [
+          { opacity: 1, transform: "translateY(0) scale(1)" },
+          { opacity: 0, transform: "translateY(6px) scale(.99)" }
+        ],
+        {
+          duration: 170,
+          easing: "cubic-bezier(.2, 0, 0, 1)",
+          fill: "forwards"
+        }
+      )
+    );
+  }
+
+  await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
 }
 
 async function api(path, options = {}) {
@@ -734,7 +836,7 @@ function renderHistorySection(kind) {
   const filters = state.history[kind];
   const items = filters.items || [];
   const table = filters.loading && !items.length
-    ? `<div class="empty">Loading history...</div>`
+    ? `<div class="empty loading-state">Loading history...</div>`
     : kind === "leave"
       ? renderLeaveTable(items, false)
       : renderClaimsTable(items, false);
@@ -800,9 +902,13 @@ function setFormSubmitting(form, submitting, label = "Submitting...") {
     if (submitting) {
       submitButton.dataset.originalText = submitButton.dataset.originalText || submitButton.textContent;
       submitButton.textContent = label;
+      submitButton.setAttribute("aria-busy", "true");
     } else if (submitButton.dataset.originalText) {
       submitButton.textContent = submitButton.dataset.originalText;
       delete submitButton.dataset.originalText;
+      submitButton.removeAttribute("aria-busy");
+    } else {
+      submitButton.removeAttribute("aria-busy");
     }
   }
   form.querySelectorAll("input, select, textarea, button").forEach((control) => {
@@ -981,6 +1087,7 @@ async function claimFormPayload(form, body) {
 }
 
 function renderLogin() {
+  lastRenderedTab = "login";
   const quote = randomQuote();
   app.innerHTML = `
     <main class="login-page">
@@ -1011,6 +1118,7 @@ function renderLogin() {
       </section>
     </main>
   `;
+  runPostRenderMotion({ viewChanged: true });
 }
 
 function renderNavButton(id, label, badge = "") {
@@ -1025,6 +1133,8 @@ function renderNavButton(id, label, badge = "") {
 function renderShell(content) {
   const { user } = state.dashboard;
   const approvals = pendingApprovalCount();
+  const viewChanged = lastRenderedTab !== state.activeTab;
+  lastRenderedTab = state.activeTab;
   if (!state.sidebarQuote) state.sidebarQuote = randomQuote();
   app.innerHTML = `
     <div class="app-shell">
@@ -1061,6 +1171,7 @@ function renderShell(content) {
     ${renderPasswordResetDialog()}
     ${renderLeaveAdjustmentDialog()}
   `;
+  runPostRenderMotion({ viewChanged });
 }
 
 function renderTopbar(title, kicker) {
@@ -2291,7 +2402,7 @@ function renderMail() {
   renderShell(`
     ${renderTopbar("Email Outbox", "Email notifications generated by leave and claim workflows.")}
     <section class="section">
-      ${state.mail.loading && !emails.length ? `<div class="empty">Loading email notifications...</div>` : renderMailList(emails)}
+      ${state.mail.loading && !emails.length ? `<div class="empty loading-state">Loading email notifications...</div>` : renderMailList(emails)}
       ${remaining > 0 ? `
         <div class="history-more">
           <button class="button small" data-action="mail-load-more">
@@ -2383,7 +2494,7 @@ function renderAuditLog() {
           </div>
         </div>
       </div>
-      ${state.audit.loading && !events.length ? `<div class="empty">Loading audit log...</div>` : renderAuditTable(events)}
+      ${state.audit.loading && !events.length ? `<div class="empty loading-state">Loading audit log...</div>` : renderAuditTable(events)}
       ${remaining > 0 ? `
         <div class="history-more">
           <button class="button small" data-action="audit-load-more">
@@ -2566,6 +2677,7 @@ document.addEventListener("submit", async (event) => {
 
 document.addEventListener("click", async (event) => {
   if (event.target.classList?.contains("modal-backdrop")) {
+    await animateDialogClose();
     state.passwordReset = { employeeId: null };
     state.leaveAdjustment = { employeeId: null };
     render();
@@ -2647,6 +2759,7 @@ document.addEventListener("click", async (event) => {
     }
 
     if (action === "close-password-reset") {
+      await animateDialogClose();
       state.passwordReset = { employeeId: null };
       render();
       return;
@@ -2659,6 +2772,7 @@ document.addEventListener("click", async (event) => {
     }
 
     if (action === "close-leave-adjustment") {
+      await animateDialogClose();
       state.leaveAdjustment = { employeeId: null };
       render();
       return;
@@ -2749,6 +2863,14 @@ document.addEventListener("click", async (event) => {
   } catch (error) {
     showToast(error.message, "error");
   }
+});
+
+document.addEventListener("keydown", async (event) => {
+  if (event.key !== "Escape" || !app.querySelector(".modal-backdrop")) return;
+  await animateDialogClose();
+  state.passwordReset = { employeeId: null };
+  state.leaveAdjustment = { employeeId: null };
+  render();
 });
 
 document.addEventListener("input", (event) => {
