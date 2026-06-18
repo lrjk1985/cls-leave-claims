@@ -1395,6 +1395,8 @@ tr:last-child td {
 }
 
 .employee-row {
+  position: relative;
+  z-index: 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
@@ -1421,6 +1423,14 @@ tr:last-child td {
 
 .employee-row[hidden] {
   display: none;
+}
+
+.employee-row:focus-within {
+  z-index: 4;
+}
+
+.employee-row:has(.action-menu[open]) {
+  z-index: 12;
 }
 
 .directory-tools {
