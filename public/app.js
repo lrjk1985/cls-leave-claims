@@ -2204,7 +2204,7 @@ function employeeRowBody(row) {
   row.querySelectorAll("[data-field]").forEach((field) => {
     const fieldName = field.dataset.field;
     if (
-      ["medicalLeaveEntitlement", "medicalLeaveRemaining"].includes(fieldName) &&
+      ["medicalLeaveEntitlement", "medicalLeaveRemaining", "medicalClaimLimit", "medicalClaimBalance"].includes(fieldName) &&
       field.dataset.originalValue !== undefined &&
       Number(field.value) === Number(field.dataset.originalValue)
     ) {
@@ -2329,7 +2329,7 @@ function renderEmployees() {
               <input id="employee-medical-leave-entitlement" name="medicalLeaveEntitlement" type="number" min="0" step="0.5" value="14">
             </div>
             <div class="field">
-              <label for="employee-medical-limit">Medical Claim Balance</label>
+              <label for="employee-medical-limit">Medical Claim Limit</label>
               <input id="employee-medical-limit" name="medicalClaimLimit" type="number" min="0" step="0.01" value="500">
             </div>
             <div class="field">
@@ -2414,8 +2414,12 @@ function renderEmployees() {
                 <input data-field="medicalLeaveRemaining" data-original-value="${displayNumber(employeeMedicalLeaveRemaining(employee))}" type="number" min="0" step="0.5" value="${displayNumber(employeeMedicalLeaveRemaining(employee))}">
               </div>
               <div class="field">
+                <label>Medical Claim Limit</label>
+                <input data-field="medicalClaimLimit" data-original-value="${displayNumber(employee.medicalClaimLimit)}" type="number" min="0" step="0.01" value="${displayNumber(employee.medicalClaimLimit)}">
+              </div>
+              <div class="field">
                 <label>Medical Claim Balance</label>
-                <input data-field="medicalClaimBalance" type="number" min="0" step="0.01" value="${employee.medicalClaimBalance ?? employee.medicalClaimLimit}">
+                <input data-field="medicalClaimBalance" data-original-value="${displayNumber(employee.medicalClaimBalance ?? employee.medicalClaimLimit)}" type="number" min="0" step="0.01" value="${displayNumber(employee.medicalClaimBalance ?? employee.medicalClaimLimit)}">
               </div>
               <div class="field">
                 <label>Active</label>
