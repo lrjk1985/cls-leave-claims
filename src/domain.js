@@ -183,10 +183,11 @@ function leaveSummary(user, leaveRequests, options = {}) {
     options.birthdayLeave ?? user.birthdayLeaveEntitlement ?? 0,
     "Birthday leave"
   );
-  const entitlement = normalizeLeaveDays(
+  const storedEntitlement = normalizeLeaveDays(
     options.entitlementOverride ?? user.leaveEntitlement ?? 0,
     "Leave entitlement"
   );
+  const entitlement = normalizeLeaveDays(storedEntitlement - adjustments, "Leave entitlement");
   const ownRequests = leaveRequests.filter(
     (request) =>
       request.employeeId === user.id &&
@@ -208,7 +209,7 @@ function leaveSummary(user, leaveRequests, options = {}) {
     adjustments,
     approved: normalizeLeaveDays(approved, "Approved leave"),
     pending: normalizeLeaveDays(pending, "Pending leave"),
-    available: normalizeLeaveDays(Math.max(0, entitlement - approved), "Available leave")
+    available: normalizeLeaveDays(Math.max(0, entitlement + adjustments - approved), "Available leave")
   };
 }
 

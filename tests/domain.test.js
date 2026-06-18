@@ -73,6 +73,23 @@ test("leaveSummary separates approved and pending leave days", () => {
   });
 });
 
+test("leaveSummary keeps entitlement separate from manual balance adjustments", () => {
+  const user = {
+    id: "u1",
+    leaveEntitlement: 11,
+    annualLeaveEntitlement: 14,
+    carriedForwardLeave: 0,
+    leavePolicyYear: 2026
+  };
+  const summary = leaveSummary(user, [], {
+    adjustments: -3
+  });
+
+  assert.equal(summary.entitlement, 14);
+  assert.equal(summary.adjustments, -3);
+  assert.equal(summary.available, 11);
+});
+
 test("medicalLeaveSummary tracks medical leave separately from annual leave", () => {
   const user = {
     id: "u1",
