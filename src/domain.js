@@ -218,6 +218,10 @@ function medicalLeaveSummary(user, leaveRequests, options = {}) {
     options.entitlementOverride ?? user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
     "Medical leave entitlement"
   );
+  const adjustmentYear = Number(user.medicalLeaveBalanceAdjustmentYear || year);
+  const balanceAdjustment = adjustmentYear === year
+    ? normalizeSignedLeaveDays(user.medicalLeaveBalanceAdjustment ?? 0, "Medical leave balance adjustment")
+    : 0;
   const ownRequests = leaveRequests.filter(
     (request) =>
       request.employeeId === user.id &&
@@ -234,11 +238,12 @@ function medicalLeaveSummary(user, leaveRequests, options = {}) {
   return {
     year,
     entitlement,
+    ...(balanceAdjustment ? { balanceAdjustment } : {}),
     approved: normalizeLeaveDays(approved, "Approved medical leave"),
     pending: normalizeLeaveDays(pending, "Pending medical leave"),
-    available: normalizeLeaveDays(Math.max(0, entitlement - approved), "Available medical leave"),
+    available: normalizeLeaveDays(Math.max(0, entitlement + balanceAdjustment - approved), "Available medical leave"),
     unreserved: normalizeLeaveDays(
-      Math.max(0, entitlement - approved - pending),
+      Math.max(0, entitlement + balanceAdjustment - approved - pending),
       "Unreserved medical leave"
     )
   };

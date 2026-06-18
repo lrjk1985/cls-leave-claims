@@ -452,6 +452,8 @@ function userToRow(user) {
     leave_service_accrual_at: nullish(user.leaveServiceAccrualAt),
     medical_claim_limit: Number(user.medicalClaimLimit || 0),
     medical_leave_entitlement: Number(user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
+    medical_leave_balance_adjustment: Number(user.medicalLeaveBalanceAdjustment || 0),
+    medical_leave_balance_adjustment_year: Number(user.medicalLeaveBalanceAdjustmentYear || user.leavePolicyYear || currentLeaveYear()),
     active: Boolean(user.active),
     password_salt: user.passwordSalt,
     password_hash: user.passwordHash,
@@ -480,6 +482,8 @@ function userFromRow(row) {
     leaveServiceAccrualAt: row.leave_service_accrual_at,
     medicalClaimLimit: Number(row.medical_claim_limit || 0),
     medicalLeaveEntitlement: Number(row.medical_leave_entitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
+    medicalLeaveBalanceAdjustment: Number(row.medical_leave_balance_adjustment || 0),
+    medicalLeaveBalanceAdjustmentYear: Number(row.medical_leave_balance_adjustment_year || row.leave_policy_year || currentLeaveYear()),
     active: Boolean(row.active),
     passwordSalt: row.password_salt,
     passwordHash: row.password_hash,
@@ -978,6 +982,11 @@ function normalizeUser(user) {
       user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
       "Medical leave entitlement"
     ),
+    medicalLeaveBalanceAdjustment: normalizeSignedLeaveDays(
+      user.medicalLeaveBalanceAdjustment ?? 0,
+      "Medical leave balance adjustment"
+    ),
+    medicalLeaveBalanceAdjustmentYear: Number(user.medicalLeaveBalanceAdjustmentYear || user.leavePolicyYear || thisYear),
     claimApproverId: user.claimApproverId ?? user.claimManagerId ?? user.claimApprover ?? user.managerId ?? null
   };
   if (user.annualLeaveEntitlement === undefined || user.annualLeaveEntitlement === null) {
@@ -1030,6 +1039,8 @@ function applyLeaveYearRollover(db, asOfDate = new Date()) {
       user.birthdayLeaveEntitlement = balance.birthdayLeave;
       user.leaveEntitlement = normalizeLeaveDays(balance.entitlement + adjustmentDays, "Leave entitlement");
       user.leavePolicyYear = balance.year;
+      user.medicalLeaveBalanceAdjustment = 0;
+      user.medicalLeaveBalanceAdjustmentYear = balance.year;
       user.leaveRolloverAt = nowIso();
       processed.push({
         userId: user.id,
@@ -2251,6 +2262,7 @@ function employeeChangeSet(db, before, after) {
     { key: "unlimitedAnnualLeave", label: "unlimited annual leave" },
     { key: "leaveEntitlement", label: "total leave entitlement" },
     { key: "medicalLeaveEntitlement", label: "medical leave entitlement" },
+    { key: "medicalLeaveBalanceAdjustment", label: "medical leave balance adjustment" },
     { key: "medicalClaimLimit", label: "medical claim limit" },
     { key: "active", label: "active status" }
   ];
@@ -2706,6 +2718,8 @@ async function createEmployee(db, body) {
     leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
     medicalLeaveEntitlement,
+    medicalLeaveBalanceAdjustment: 0,
+    medicalLeaveBalanceAdjustmentYear: leavePolicyYear,
     active: true,
     createdAt,
     updatedAt: createdAt,
@@ -2809,10 +2823,11 @@ function updateEmployee(db, employeeId, body) {
   if (body.medicalLeaveRemaining !== undefined) {
     const remaining = normalizeLeaveDays(body.medicalLeaveRemaining, "Medical leave remaining");
     const summary = medicalLeaveSummary(employee, db.leaveRequests);
-    employee.medicalLeaveEntitlement = normalizeLeaveDays(
-      summary.approved + remaining,
-      "Medical leave entitlement"
+    employee.medicalLeaveBalanceAdjustment = normalizeSignedLeaveDays(
+      remaining + summary.approved - summary.entitlement,
+      "Medical leave balance adjustment"
     );
+    employee.medicalLeaveBalanceAdjustmentYear = summary.year;
   }
   if (body.active !== undefined) {
     employee.active = Boolean(body.active);

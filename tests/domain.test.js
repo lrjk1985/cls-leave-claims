@@ -97,6 +97,30 @@ test("medicalLeaveSummary tracks medical leave separately from annual leave", ()
   });
 });
 
+test("medicalLeaveSummary keeps entitlement separate from manual remaining balance adjustments", () => {
+  const user = {
+    id: "u1",
+    medicalLeaveEntitlement: 14,
+    medicalLeaveBalanceAdjustment: -0.5,
+    medicalLeaveBalanceAdjustmentYear: 2026,
+    leavePolicyYear: 2026
+  };
+  const summary = medicalLeaveSummary(user, [
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "approved", days: 3 },
+    { employeeId: "u1", leaveYear: 2026, type: "Medical Leave", status: "pending", days: 1 }
+  ]);
+
+  assert.deepEqual(summary, {
+    year: 2026,
+    entitlement: 14,
+    balanceAdjustment: -0.5,
+    approved: 3,
+    pending: 1,
+    available: 10.5,
+    unreserved: 9.5
+  });
+});
+
 test("serviceAdjustedAnnualLeave adds service years and caps annual base at 18", () => {
   const user = {
     startingLeaveEntitlement: 14,

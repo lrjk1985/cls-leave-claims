@@ -22,6 +22,8 @@ create table if not exists public.cls_users (
   leave_service_accrual_at timestamptz,
   medical_claim_limit numeric(12, 2) not null default 0,
   medical_leave_entitlement numeric(6, 2) not null default 14,
+  medical_leave_balance_adjustment numeric(6, 2) not null default 0,
+  medical_leave_balance_adjustment_year integer,
   active boolean not null default true,
   password_salt text not null,
   password_hash text not null,
@@ -33,6 +35,10 @@ create table if not exists public.cls_users (
 
 alter table public.cls_users
   add column if not exists unlimited_annual_leave boolean not null default false;
+
+alter table public.cls_users
+  add column if not exists medical_leave_balance_adjustment numeric(6, 2) not null default 0,
+  add column if not exists medical_leave_balance_adjustment_year integer;
 
 create table if not exists public.cls_leave_requests (
   id text primary key,

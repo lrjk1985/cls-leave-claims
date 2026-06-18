@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { __test } = require("../server");
+const { medicalLeaveSummary } = require("../src/domain");
 
 test("parseMultipartBuffer keeps receipt uploads binary", () => {
   const boundary = "----cls-leave-claims-test";
@@ -665,8 +666,12 @@ test("updateEmployee lets admins set current-year medical leave remaining", () =
   };
 
   const updated = __test.updateEmployee(db, "usr_employee", { medicalLeaveRemaining: "9.5" });
+  const summary = medicalLeaveSummary(updated, db.leaveRequests);
 
-  assert.equal(updated.medicalLeaveEntitlement, 13.5);
+  assert.equal(updated.medicalLeaveEntitlement, 14);
+  assert.equal(updated.medicalLeaveBalanceAdjustment, -0.5);
+  assert.equal(summary.entitlement, 14);
+  assert.equal(summary.available, 9.5);
 });
 
 test("updateEmployee lets admins set medical leave entitlement independently", () => {
@@ -1099,6 +1104,8 @@ test("Supabase table mappings round-trip core app records", () => {
       leaveServiceAccrualAt: "2026-01-01T00:00:00.000Z",
       medicalClaimLimit: 500,
       medicalLeaveEntitlement: 14,
+      medicalLeaveBalanceAdjustment: -0.5,
+      medicalLeaveBalanceAdjustmentYear: 2026,
       active: true,
       passwordSalt: "salt",
       passwordHash: "hash",
