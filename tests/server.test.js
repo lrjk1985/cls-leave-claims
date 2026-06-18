@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { __test } = require("../server");
-const { medicalLeaveSummary } = require("../src/domain");
+const { medicalClaimSummary, medicalLeaveSummary } = require("../src/domain");
 
 test("parseMultipartBuffer keeps receipt uploads binary", () => {
   const boundary = "----cls-leave-claims-test";
@@ -734,8 +734,12 @@ test("updateEmployee lets admins set current-year medical claim balance", () => 
   };
 
   const updated = __test.updateEmployee(db, "usr_employee", { medicalClaimBalance: "350.50" });
+  const summary = medicalClaimSummary(updated, db.medicalClaims, { year: 2026 });
 
-  assert.equal(updated.medicalClaimLimit, 475.75);
+  assert.equal(updated.medicalClaimLimit, 500);
+  assert.equal(updated.medicalClaimBalanceAdjustment, -24.25);
+  assert.equal(summary.limit, 500);
+  assert.equal(summary.available, 350.5);
 });
 
 test("updateEmployee toggles unlimited annual leave", () => {
@@ -1103,6 +1107,8 @@ test("Supabase table mappings round-trip core app records", () => {
       leaveRolloverAt: "2026-01-01T00:00:00.000Z",
       leaveServiceAccrualAt: "2026-01-01T00:00:00.000Z",
       medicalClaimLimit: 500,
+      medicalClaimBalanceAdjustment: -25,
+      medicalClaimBalanceAdjustmentYear: 2026,
       medicalLeaveEntitlement: 14,
       medicalLeaveBalanceAdjustment: -0.5,
       medicalLeaveBalanceAdjustmentYear: 2026,

@@ -299,13 +299,18 @@ function medicalClaimSummary(user, claims, options = {}) {
     .filter((claim) => claim.status === "pending")
     .reduce((total, claim) => total + Number(claim.amount || 0), 0);
   const limit = Number(user.medicalClaimLimit || 0);
+  const adjustmentYear = Number(user.medicalClaimBalanceAdjustmentYear || year);
+  const balanceAdjustment = adjustmentYear === year
+    ? roundMoney(user.medicalClaimBalanceAdjustment ?? 0)
+    : 0;
 
   return {
     limit,
+    ...(balanceAdjustment ? { balanceAdjustment } : {}),
     approved: roundMoney(approved),
     pending: roundMoney(pending),
-    available: roundMoney(limit - approved),
-    unreserved: roundMoney(limit - approved - pending)
+    available: roundMoney(limit + balanceAdjustment - approved),
+    unreserved: roundMoney(limit + balanceAdjustment - approved - pending)
   };
 }
 

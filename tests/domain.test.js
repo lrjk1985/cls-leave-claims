@@ -217,6 +217,28 @@ test("medicalClaimSummary only counts medical claims from the selected year", ()
   });
 });
 
+test("medicalClaimSummary keeps limit separate from manual balance adjustments", () => {
+  const user = {
+    id: "u1",
+    medicalClaimLimit: 500,
+    medicalClaimBalanceAdjustment: -75,
+    medicalClaimBalanceAdjustmentYear: 2026
+  };
+  const summary = medicalClaimSummary(user, [
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-02-10", status: "approved", amount: 125 },
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-03-15", status: "pending", amount: 40 }
+  ], { year: 2026 });
+
+  assert.deepEqual(summary, {
+    limit: 500,
+    balanceAdjustment: -75,
+    approved: 125,
+    pending: 40,
+    available: 300,
+    unreserved: 260
+  });
+});
+
 test("generalClaimSummary tracks only others claim amounts", () => {
   const user = { id: "u1", medicalClaimLimit: 500 };
   const summary = generalClaimSummary(user, [

@@ -21,6 +21,8 @@ create table if not exists public.cls_users (
   leave_rollover_at timestamptz,
   leave_service_accrual_at timestamptz,
   medical_claim_limit numeric(12, 2) not null default 0,
+  medical_claim_balance_adjustment numeric(12, 2) not null default 0,
+  medical_claim_balance_adjustment_year integer,
   medical_leave_entitlement numeric(6, 2) not null default 14,
   medical_leave_balance_adjustment numeric(6, 2) not null default 0,
   medical_leave_balance_adjustment_year integer,
@@ -39,6 +41,10 @@ alter table public.cls_users
 alter table public.cls_users
   add column if not exists medical_leave_balance_adjustment numeric(6, 2) not null default 0,
   add column if not exists medical_leave_balance_adjustment_year integer;
+
+alter table public.cls_users
+  add column if not exists medical_claim_balance_adjustment numeric(12, 2) not null default 0,
+  add column if not exists medical_claim_balance_adjustment_year integer;
 
 create table if not exists public.cls_leave_requests (
   id text primary key,
