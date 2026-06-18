@@ -624,6 +624,96 @@ test("updateEmployee rejects quarter-day carry forward and birthday leave", () =
   );
 });
 
+test("updateEmployee lets admins set current-year medical leave remaining", () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    leavePolicyYear: 2026,
+    medicalLeaveEntitlement: 14
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [
+      {
+        id: "leave_medical_1",
+        employeeId: "usr_employee",
+        type: "Medical Leave",
+        leaveYear: 2026,
+        status: "approved",
+        days: 4
+      },
+      {
+        id: "leave_medical_pending",
+        employeeId: "usr_employee",
+        type: "Medical Leave",
+        leaveYear: 2026,
+        status: "pending",
+        days: 2
+      },
+      {
+        id: "leave_medical_old",
+        employeeId: "usr_employee",
+        type: "Medical Leave",
+        leaveYear: 2025,
+        status: "approved",
+        days: 8
+      }
+    ],
+    leaveAdjustments: []
+  };
+
+  const updated = __test.updateEmployee(db, "usr_employee", { medicalLeaveRemaining: "9.5" });
+
+  assert.equal(updated.medicalLeaveEntitlement, 13.5);
+});
+
+test("updateEmployee lets admins set current-year medical claim balance", () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    medicalClaimLimit: 500
+  };
+  const db = {
+    users: [employee],
+    medicalClaims: [
+      {
+        id: "claim_medical_1",
+        employeeId: "usr_employee",
+        claimType: "medical",
+        claimDate: "2026-02-10",
+        status: "approved",
+        amount: 125.25
+      },
+      {
+        id: "claim_pending",
+        employeeId: "usr_employee",
+        claimType: "medical",
+        claimDate: "2026-03-15",
+        status: "pending",
+        amount: 80
+      },
+      {
+        id: "claim_old",
+        employeeId: "usr_employee",
+        claimType: "medical",
+        claimDate: "2025-12-20",
+        status: "approved",
+        amount: 300
+      }
+    ],
+    leaveRequests: [],
+    leaveAdjustments: []
+  };
+
+  const updated = __test.updateEmployee(db, "usr_employee", { medicalClaimBalance: "350.50" });
+
+  assert.equal(updated.medicalClaimLimit, 475.75);
+});
+
 test("updateEmployee toggles unlimited annual leave", () => {
   const employee = {
     id: "usr_employee",

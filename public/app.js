@@ -2186,7 +2186,9 @@ function employeeSearchText(employee) {
     `birthday ${employee.birthdayLeaveEntitlement ?? 0}`,
     employee.unlimitedAnnualLeave ? "unlimited annual leave" : "limited annual leave",
     `medical leave ${employee.medicalLeaveEntitlement ?? 14}`,
-    `medical ${employee.medicalClaimLimit}`,
+    `medical remaining ${employee.medicalLeaveRemaining ?? employee.medicalLeaveEntitlement ?? 14}`,
+    `medical claim ${employee.medicalClaimLimit}`,
+    `medical claim balance ${employee.medicalClaimBalance ?? employee.medicalClaimLimit}`,
     employee.active ? "active" : "inactive"
   ].join(" ").toLowerCase();
 }
@@ -2300,7 +2302,11 @@ function renderEmployees() {
               <input id="employee-unlimited-annual-leave" name="unlimitedAnnualLeave" type="checkbox">
             </label>
             <div class="field">
-              <label for="employee-medical-limit">Medical Claim Limit</label>
+              <label for="employee-medical-leave-entitlement">Medical Leave Days</label>
+              <input id="employee-medical-leave-entitlement" name="medicalLeaveEntitlement" type="number" min="0" step="0.5" value="14">
+            </div>
+            <div class="field">
+              <label for="employee-medical-limit">Medical Claim Balance</label>
               <input id="employee-medical-limit" name="medicalClaimLimit" type="number" min="0" step="0.01" value="500">
             </div>
             <div class="field">
@@ -2377,8 +2383,12 @@ function renderEmployees() {
                 <input value="${employee.unlimitedAnnualLeave ? "Unlimited" : employee.leaveEntitlement}" disabled>
               </div>
               <div class="field">
-                <label>Medical Limit</label>
-                <input data-field="medicalClaimLimit" type="number" min="0" step="0.01" value="${employee.medicalClaimLimit}">
+                <label>Medical Leave Remaining</label>
+                <input data-field="medicalLeaveRemaining" type="number" min="0" step="0.5" value="${employee.medicalLeaveRemaining ?? employee.medicalLeaveEntitlement ?? 14}">
+              </div>
+              <div class="field">
+                <label>Medical Claim Balance</label>
+                <input data-field="medicalClaimBalance" type="number" min="0" step="0.01" value="${employee.medicalClaimBalance ?? employee.medicalClaimLimit}">
               </div>
               <div class="field">
                 <label>Active</label>

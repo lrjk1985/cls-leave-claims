@@ -188,6 +188,15 @@ function publicUser(user) {
   return safeUser;
 }
 
+function publicEmployee(db, employee) {
+  if (!employee) return null;
+  return {
+    ...publicUser(employee),
+    medicalLeaveRemaining: medicalLeaveSummary(employee, db.leaveRequests).available,
+    medicalClaimBalance: medicalClaimSummary(employee, db.medicalClaims).available
+  };
+}
+
 function jsonResponse(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -2193,7 +2202,7 @@ function visibleEmails(db, user) {
 }
 
 function visibleUsers(db, user) {
-  return db.users.filter((employee) => canSeeEmployee(user, employee)).map(publicUser);
+  return db.users.filter((employee) => canSeeEmployee(user, employee)).map((employee) => publicEmployee(db, employee));
 }
 
 function historyYear(kind, item) {
@@ -2558,7 +2567,7 @@ function statusLabelForExport(status) {
 }
 
 function dashboard(db, user) {
-  const employees = db.users.map(publicUser);
+  const employees = db.users.map((employee) => publicEmployee(db, employee));
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
   const leaveRequests = visibleLeaveRequests(db, user);
   const medicalClaims = visibleMedicalClaims(db, user);
@@ -2590,7 +2599,7 @@ function dashboard(db, user) {
     emails: recentEmails,
     teamMembers: db.users
       .filter((employee) => employee.managerId === user.id)
-      .map(publicUser),
+      .map((employee) => publicEmployee(db, employee)),
     counts: {
       pendingLeave: pendingLeaveRequests.filter(
         (request) => request.status === "pending" && canReview(user, request)
@@ -2651,6 +2660,10 @@ async function createEmployee(db, body) {
   const birthdayLeaveEntitlement = normalizeLeaveDays(body.birthdayLeaveEntitlement ?? 0, "Birthday leave");
   const unlimitedAnnualLeave = booleanValue(body.unlimitedAnnualLeave);
   const medicalClaimLimit = Number(body.medicalClaimLimit ?? 500);
+  const medicalLeaveEntitlement = normalizeLeaveDays(
+    body.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
+    "Medical leave entitlement"
+  );
   const password = assertPassword(body.password || "welcome123", "Temporary password");
 
   if (!name) throw new Error("Employee name is required.");
@@ -2692,7 +2705,7 @@ async function createEmployee(db, body) {
     ),
     leaveServiceAccrualAt: createdAt,
     medicalClaimLimit,
-    medicalLeaveEntitlement: ANNUAL_MEDICAL_LEAVE_DAYS,
+    medicalLeaveEntitlement,
     active: true,
     createdAt,
     updatedAt: createdAt,
@@ -2781,9 +2794,23 @@ function updateEmployee(db, employeeId, body) {
     if (!Number.isFinite(limit) || limit < 0) throw new Error("Medical claim limit must be 0 or more.");
     employee.medicalClaimLimit = limit;
   }
+  if (body.medicalClaimBalance !== undefined) {
+    const balance = Number(body.medicalClaimBalance);
+    if (!Number.isFinite(balance) || balance < 0) throw new Error("Medical claim balance must be 0 or more.");
+    const summary = medicalClaimSummary(employee, db.medicalClaims);
+    employee.medicalClaimLimit = Math.round((summary.approved + balance) * 100) / 100;
+  }
   if (body.medicalLeaveEntitlement !== undefined) {
     employee.medicalLeaveEntitlement = normalizeLeaveDays(
       body.medicalLeaveEntitlement,
+      "Medical leave entitlement"
+    );
+  }
+  if (body.medicalLeaveRemaining !== undefined) {
+    const remaining = normalizeLeaveDays(body.medicalLeaveRemaining, "Medical leave remaining");
+    const summary = medicalLeaveSummary(employee, db.leaveRequests);
+    employee.medicalLeaveEntitlement = normalizeLeaveDays(
+      summary.approved + remaining,
       "Medical leave entitlement"
     );
   }
@@ -3434,7 +3461,7 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 201, {
       data: {
         adjustment,
-        employee: publicUser(employee),
+        employee: publicEmployee(db, employee),
         patch: dashboardPatch(db, user),
         stale: { history: ["leave"], audit: true }
       }
@@ -3462,7 +3489,7 @@ async function handleApi(req, res, pathname) {
     await saveDbAndDeliverQueuedEmails(db);
     return jsonResponse(res, 201, {
       data: {
-        employee: publicUser(employee),
+        employee: publicEmployee(db, employee),
         patch: dashboardPatch(db, user),
         stale: { mail: true, audit: true }
       }
@@ -3479,7 +3506,7 @@ async function handleApi(req, res, pathname) {
     await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
-        employees: employees.map(publicUser),
+        employees: employees.map((employee) => publicEmployee(db, employee)),
         patch: dashboardPatch(db, user),
         stale: { audit: true }
       }
@@ -3501,7 +3528,7 @@ async function handleApi(req, res, pathname) {
     await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
-        employee: publicUser(employee),
+        employee: publicEmployee(db, employee),
         patch: dashboardPatch(db, user),
         stale: { audit: true }
       }
@@ -3517,7 +3544,7 @@ async function handleApi(req, res, pathname) {
     await saveDb(db);
     return jsonResponse(res, 200, {
       data: {
-        employee: publicUser(employee),
+        employee: publicEmployee(db, employee),
         patch: dashboardPatch(db, user),
         stale: { audit: true }
       }
