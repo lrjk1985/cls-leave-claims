@@ -1393,6 +1393,12 @@ function percentage(numerator, denominator) {
   return Math.max(0, Math.min(100, Math.round((Number(numerator || 0) / total) * 100)));
 }
 
+function displayNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  return String(Math.round(number * 100) / 100);
+}
+
 function renderEmployeeBalanceRings() {
   const summary = state.dashboard.leaveSummary;
   const medicalSummary = state.dashboard.medicalLeaveSummary || {
@@ -2205,6 +2211,25 @@ function employeeRowBody(row) {
   return body;
 }
 
+function syncEmployeeMedicalLeaveFields(source) {
+  const row = source.closest("[data-employee-id]");
+  if (!row || source.value === "") return;
+
+  const approved = Number(row.dataset.medicalLeaveApproved || 0);
+  const value = Number(source.value);
+  if (!Number.isFinite(approved) || !Number.isFinite(value)) return;
+
+  const entitlementField = row.querySelector("[data-medical-leave-entitlement]");
+  const remainingField = row.querySelector("[data-medical-leave-remaining]");
+  if (!entitlementField || !remainingField) return;
+
+  if (source.matches("[data-medical-leave-entitlement]")) {
+    remainingField.value = displayNumber(Math.max(0, value - approved));
+  } else {
+    entitlementField.value = displayNumber(value + approved);
+  }
+}
+
 function medicalClaimsExportUrl({ employeeId = "" } = {}) {
   const year = document.querySelector("[data-export-field='medical-claims-year']")?.value || currentYearText();
   const params = new URLSearchParams({ year });
@@ -2244,6 +2269,18 @@ function renderLeaveAdjustmentHistory() {
       </table>
     </div>
   `;
+}
+
+function employeeMedicalLeaveEntitlement(employee) {
+  return Number(employee.medicalLeaveEntitlement ?? 14);
+}
+
+function employeeMedicalLeaveRemaining(employee) {
+  return Number(employee.medicalLeaveRemaining ?? employeeMedicalLeaveEntitlement(employee));
+}
+
+function employeeMedicalLeaveApproved(employee) {
+  return Math.max(0, employeeMedicalLeaveEntitlement(employee) - employeeMedicalLeaveRemaining(employee));
 }
 
 function renderEmployees() {
@@ -2333,7 +2370,7 @@ function renderEmployees() {
         <div class="section-body">
           <div class="employee-directory">
           ${state.dashboard.allEmployees.map((employee) => `
-            <div class="employee-row" data-employee-id="${employee.id}" data-search="${escapeHtml(employeeSearchText(employee))}">
+            <div class="employee-row" data-employee-id="${employee.id}" data-medical-leave-approved="${displayNumber(employeeMedicalLeaveApproved(employee))}" data-search="${escapeHtml(employeeSearchText(employee))}">
               <div class="field">
                 <label>Name</label>
                 <input data-field="name" value="${escapeHtml(employee.name)}">
@@ -2383,8 +2420,12 @@ function renderEmployees() {
                 <input value="${employee.unlimitedAnnualLeave ? "Unlimited" : employee.leaveEntitlement}" disabled>
               </div>
               <div class="field">
+                <label>Medical Leave Days</label>
+                <input data-field="medicalLeaveEntitlement" data-medical-leave-entitlement type="number" min="0" step="0.5" value="${displayNumber(employeeMedicalLeaveEntitlement(employee))}">
+              </div>
+              <div class="field">
                 <label>Medical Leave Remaining</label>
-                <input data-field="medicalLeaveRemaining" type="number" min="0" step="0.5" value="${employee.medicalLeaveRemaining ?? employee.medicalLeaveEntitlement ?? 14}">
+                <input data-field="medicalLeaveRemaining" data-medical-leave-remaining type="number" min="0" step="0.5" value="${displayNumber(employeeMedicalLeaveRemaining(employee))}">
               </div>
               <div class="field">
                 <label>Medical Claim Balance</label>
@@ -2920,6 +2961,12 @@ document.addEventListener("keydown", async (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  const medicalLeaveField = event.target.closest("[data-medical-leave-entitlement], [data-medical-leave-remaining]");
+  if (medicalLeaveField) {
+    syncEmployeeMedicalLeaveFields(medicalLeaveField);
+    return;
+  }
+
   const input = event.target.closest("[data-action='employee-search']");
   if (!input) return;
 

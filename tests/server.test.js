@@ -669,6 +669,25 @@ test("updateEmployee lets admins set current-year medical leave remaining", () =
   assert.equal(updated.medicalLeaveEntitlement, 13.5);
 });
 
+test("updateEmployee lets admins set medical leave entitlement independently", () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    medicalLeaveEntitlement: 14
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    leaveAdjustments: []
+  };
+
+  const updated = __test.updateEmployee(db, "usr_employee", { medicalLeaveEntitlement: "16.5" });
+
+  assert.equal(updated.medicalLeaveEntitlement, 16.5);
+});
+
 test("updateEmployee lets admins set current-year medical claim balance", () => {
   const employee = {
     id: "usr_employee",
