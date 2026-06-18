@@ -771,6 +771,67 @@ test("createClaim routes claims to the separate claims approver", async () => {
   });
 });
 
+test("createClaim validates medical claim balance against the claim date year", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    medicalClaimLimit: 500
+  };
+  const db = {
+    users: [
+      employee,
+      {
+        id: "usr_manager",
+        name: "Manager",
+        email: "manager@cls.local",
+        role: "manager"
+      }
+    ],
+    medicalClaims: [
+      {
+        id: "claim_existing",
+        employeeId: "usr_employee",
+        managerId: "usr_manager",
+        claimType: "medical",
+        claimDate: "2027-01-15",
+        amount: 450,
+        status: "pending"
+      }
+    ],
+    emails: []
+  };
+
+  let createdClaim;
+  let caughtError;
+  try {
+    createdClaim = await __test.createClaim(db, employee, {
+      category: "Medical",
+      claimDate: "2027-02-04",
+      provider: "Clinic",
+      amount: "100",
+      description: "Consultation",
+      receipt: {
+        name: "claim.pdf",
+        buffer: Buffer.from("%PDF-1.4\nclaim receipt\n", "utf8")
+      }
+    });
+  } catch (error) {
+    caughtError = error;
+  } finally {
+    if (createdClaim?.receipt?.storedName) {
+      await fs.rm(path.join(__dirname, "..", "data", "uploads", createdClaim.receipt.storedName), {
+        force: true
+      });
+    }
+  }
+
+  assert.ok(caughtError);
+  assert.match(caughtError.message, /only \$50\.00 is available/);
+});
+
 test("medicalClaimsExport exports medical claims by year and employee", () => {
   const db = {
     users: [

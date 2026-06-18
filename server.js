@@ -3138,7 +3138,9 @@ async function createClaim(db, user, body) {
   if (!description) throw new Error("Claim description is required.");
 
   if (claimType === "medical") {
-    const summary = medicalClaimSummary(user, db.medicalClaims);
+    const summary = medicalClaimSummary(user, db.medicalClaims, {
+      year: Number(claimDate.slice(0, 4))
+    });
     if (amount > summary.unreserved) {
       throw new Error(`This medical claim needs $${amount.toFixed(2)}, but only $${summary.unreserved.toFixed(2)} is available after approved and pending claims.`);
     }

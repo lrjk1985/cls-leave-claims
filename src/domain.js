@@ -275,9 +275,17 @@ function roundMoney(value) {
   return Math.round(Number(value || 0) * 100) / 100;
 }
 
-function medicalClaimSummary(user, claims) {
+function claimYear(claim) {
+  return Number(String(claim.claimDate || "").slice(0, 4));
+}
+
+function medicalClaimSummary(user, claims, options = {}) {
+  const year = Number(options.year || currentLeaveYear());
   const ownMedicalClaims = claims.filter(
-    (claim) => claim.employeeId === user.id && claimKind(claim.claimType) === "medical"
+    (claim) =>
+      claim.employeeId === user.id &&
+      claimKind(claim.claimType) === "medical" &&
+      claimYear(claim) === year
   );
   const approved = ownMedicalClaims
     .filter((claim) => claim.status === "approved")

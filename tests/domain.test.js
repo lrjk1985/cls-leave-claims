@@ -160,11 +160,11 @@ test("nextLeaveYearBalance keeps manually set annual leave as the base", () => {
 test("medicalClaimSummary tracks approved, pending, available, and unreserved amounts", () => {
   const user = { id: "u1", medicalClaimLimit: 500 };
   const summary = medicalClaimSummary(user, [
-    { employeeId: "u1", claimType: "medical", status: "approved", amount: 120.25 },
-    { employeeId: "u1", claimType: "medical", status: "pending", amount: 80.1 },
-    { employeeId: "u1", claimType: "general", status: "approved", amount: 999 },
-    { employeeId: "u2", claimType: "medical", status: "approved", amount: 50 }
-  ]);
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-02-10", status: "approved", amount: 120.25 },
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-03-15", status: "pending", amount: 80.1 },
+    { employeeId: "u1", claimType: "general", claimDate: "2026-02-10", status: "approved", amount: 999 },
+    { employeeId: "u2", claimType: "medical", claimDate: "2026-02-10", status: "approved", amount: 50 }
+  ], { year: 2026 });
 
   assert.deepEqual(summary, {
     limit: 500,
@@ -172,6 +172,24 @@ test("medicalClaimSummary tracks approved, pending, available, and unreserved am
     pending: 80.1,
     available: 379.75,
     unreserved: 299.65
+  });
+});
+
+test("medicalClaimSummary only counts medical claims from the selected year", () => {
+  const user = { id: "u1", medicalClaimLimit: 500 };
+  const summary = medicalClaimSummary(user, [
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-02-10", status: "approved", amount: 120 },
+    { employeeId: "u1", claimType: "medical", claimDate: "2026-03-15", status: "pending", amount: 80 },
+    { employeeId: "u1", claimType: "medical", claimDate: "2025-12-20", status: "approved", amount: 300 },
+    { employeeId: "u1", claimType: "medical", claimDate: "2027-01-05", status: "pending", amount: 40 }
+  ], { year: 2026 });
+
+  assert.deepEqual(summary, {
+    limit: 500,
+    approved: 120,
+    pending: 80,
+    available: 380,
+    unreserved: 300
   });
 });
 
