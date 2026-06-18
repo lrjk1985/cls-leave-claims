@@ -1173,6 +1173,8 @@ tr:last-child td {
 .loading-state {
   position: relative;
   overflow: hidden;
+  display: grid;
+  gap: 16px;
 }
 
 .loading-state::after {
@@ -1185,6 +1187,53 @@ tr:last-child td {
   animation: loading-sheen 1200ms var(--ease-standard) infinite;
 }
 
+.loading-copy {
+  font-weight: 800;
+  color: var(--muted);
+}
+
+.skeleton-stack {
+  display: grid;
+  gap: 10px;
+  width: min(520px, 100%);
+  margin: 0 auto;
+}
+
+.skeleton-stack.table {
+  width: min(760px, 100%);
+}
+
+.skeleton-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, 24%);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid rgba(230, 223, 213, 0.72);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(230, 223, 213, 0.7), rgba(238, 244, 255, 0.9), rgba(230, 223, 213, 0.7));
+  background-size: 220% 100%;
+  animation: skeleton-sheen 1300ms var(--ease-standard) infinite;
+}
+
+.skeleton-line.wide {
+  width: 100%;
+}
+
+.skeleton-line.medium {
+  width: 72%;
+}
+
+.skeleton-line.short {
+  width: 48%;
+}
+
 .history-more {
   display: flex;
   align-items: center;
@@ -1193,22 +1242,54 @@ tr:last-child td {
   border-top: 1px solid var(--line);
 }
 
-.toast {
+.toast-stack {
   position: fixed;
   right: 22px;
   bottom: 22px;
+  z-index: 10;
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
   max-width: min(420px, calc(100vw - 44px));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
   padding: 14px 16px;
   border-radius: 8px;
   background: #252436;
   color: #fff;
   box-shadow: var(--shadow);
-  z-index: 10;
+  pointer-events: auto;
   animation: toast-in var(--motion-medium) var(--ease-out);
 }
 
 .toast.error {
   background: var(--red);
+}
+
+.toast-icon {
+  min-width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.toast-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.toast-exit {
+  animation: toast-out 170ms var(--ease-standard) forwards;
 }
 
 .modal-backdrop {
@@ -1452,6 +1533,13 @@ tr:last-child td {
   }
 }
 
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(.99);
+  }
+}
+
 @keyframes menu-in {
   from {
     opacity: 0;
@@ -1460,6 +1548,15 @@ tr:last-child td {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes skeleton-sheen {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
   }
 }
 
@@ -1543,6 +1640,17 @@ tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  .toast-stack {
+    right: 14px;
+    bottom: 14px;
+    left: 14px;
+    justify-items: stretch;
+  }
+
+  .toast {
+    max-width: 100%;
+  }
+
   .main,
   .login-card,
   .login-panel {

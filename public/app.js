@@ -333,13 +333,49 @@ function annualLeaveDisplay(value) {
 }
 
 function showToast(message, type = "ok") {
-  const old = document.querySelector(".toast");
-  if (old) old.remove();
+  let stack = document.querySelector(".toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.className = "toast-stack";
+    stack.setAttribute("aria-live", "polite");
+    stack.setAttribute("aria-atomic", "false");
+    document.body.append(stack);
+  }
+
+  const visibleToasts = [...stack.querySelectorAll(".toast")];
+  visibleToasts.slice(0, Math.max(0, visibleToasts.length - 2)).forEach((item) => item.remove());
+
   const toast = document.createElement("div");
-  toast.className = `toast ${type === "error" ? "error" : ""}`;
-  toast.textContent = message;
-  document.body.append(toast);
-  setTimeout(() => toast.remove(), 4200);
+  toast.className = `toast ${type === "error" ? "error" : "success"}`;
+  toast.setAttribute("role", type === "error" ? "alert" : "status");
+  toast.innerHTML = `
+    <span class="toast-icon" aria-hidden="true">${type === "error" ? "!" : "OK"}</span>
+    <span class="toast-message">${escapeHtml(message)}</span>
+  `;
+  stack.append(toast);
+
+  const dismiss = () => {
+    toast.classList.add("toast-exit");
+    setTimeout(() => toast.remove(), 180);
+  };
+  setTimeout(dismiss, type === "error" ? 5600 : 3800);
+}
+
+function renderLoadingState(label, variant = "list") {
+  const rows = variant === "table" ? 5 : 3;
+  return `
+    <div class="empty loading-state" aria-busy="true" aria-live="polite">
+      <div class="loading-copy">${escapeHtml(label)}</div>
+      <div class="skeleton-stack ${variant === "table" ? "table" : ""}" aria-hidden="true">
+        ${Array.from({ length: rows }, (_item, index) => `
+          <div class="skeleton-row">
+            <span class="skeleton-line wide"></span>
+            <span class="skeleton-line ${index % 2 ? "short" : "medium"}"></span>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function shouldReduceMotion() {
@@ -836,7 +872,7 @@ function renderHistorySection(kind) {
   const filters = state.history[kind];
   const items = filters.items || [];
   const table = filters.loading && !items.length
-    ? `<div class="empty loading-state">Loading history...</div>`
+    ? renderLoadingState(`Loading ${kind === "leave" ? "leave" : "claim"} history`, "table")
     : kind === "leave"
       ? renderLeaveTable(items, false)
       : renderClaimsTable(items, false);
@@ -1463,7 +1499,7 @@ function renderEmployeeRecentRequests() {
             </article>
           `).join("")}
         </div>
-      ` : `<div class="empty">No active leave or claim requests.</div>`}
+      ` : `<div class="empty">You're all caught up. New leave and claim requests will appear here.</div>`}
     </section>
   `;
 }
@@ -1747,7 +1783,7 @@ function renderOverview() {
             </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
-          ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, true) : `<div class="empty">No pending leave requests.</div>`}
+          ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, true) : `<div class="empty">No leave approvals need attention.</div>`}
         </section>
         <section class="section management-section">
           <div class="section-header">
@@ -1757,7 +1793,7 @@ function renderOverview() {
             </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
-          ${pendingClaims.length ? renderClaimsTable(pendingClaims, true) : `<div class="empty">No pending medical claims.</div>`}
+          ${pendingClaims.length ? renderClaimsTable(pendingClaims, true) : `<div class="empty">No claim approvals need attention.</div>`}
         </section>
       </div>
       <section class="section">
@@ -1823,7 +1859,7 @@ function renderLeave() {
         <div class="section-header">
           <h2 class="section-title">Pending Leave Applications</h2>
         </div>
-        ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, false) : `<div class="empty">No pending leave applications.</div>`}
+        ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, false) : `<div class="empty">Submitted leave applications that are waiting for review will appear here.</div>`}
       </section>
       ${renderHistorySection("leave")}
     </div>
@@ -1921,7 +1957,7 @@ function renderClaims() {
         <div class="section-header">
           <h2 class="section-title">Pending Claims</h2>
         </div>
-        ${pendingClaims.length ? renderClaimsTable(pendingClaims, false) : `<div class="empty">No pending claims.</div>`}
+        ${pendingClaims.length ? renderClaimsTable(pendingClaims, false) : `<div class="empty">Submitted claims that are waiting for review will appear here.</div>`}
       </section>
       ${renderHistorySection("claim")}
     </div>
@@ -1942,7 +1978,7 @@ function renderApprovals() {
             <p class="page-kicker">Approve or not approve pending leave.</p>
           </div>
         </div>
-        ${leave.length ? renderLeaveTable(leave, true) : `<div class="empty">No leave applications are pending.</div>`}
+        ${leave.length ? renderLeaveTable(leave, true) : `<div class="empty">No leave applications are waiting for your decision.</div>`}
       </section>
       <section class="section management-section">
         <div class="section-header">
@@ -1951,7 +1987,7 @@ function renderApprovals() {
             <p class="page-kicker">Review receipts, notes, and claim amounts.</p>
           </div>
         </div>
-        ${claims.length ? renderClaimsTable(claims, true) : `<div class="empty">No medical claims are pending.</div>`}
+        ${claims.length ? renderClaimsTable(claims, true) : `<div class="empty">No claims are waiting for your decision.</div>`}
       </section>
     </div>
   `);
@@ -2010,7 +2046,7 @@ function renderMedicalCertificateLink(item) {
 }
 
 function renderLeaveTable(items, approvalsMode) {
-  if (!items.length) return `<div class="empty">No leave requests found.</div>`;
+  if (!items.length) return `<div class="empty">No leave requests match the current view.</div>`;
   return `
     <div class="table-wrap">
       <table>
@@ -2071,7 +2107,7 @@ function renderReceiptCell(item) {
 }
 
 function renderClaimsTable(items, approvalsMode) {
-  if (!items.length) return `<div class="empty">No claims found.</div>`;
+  if (!items.length) return `<div class="empty">No claims match the current view.</div>`;
   return `
     <div class="table-wrap">
       <table>
@@ -2176,7 +2212,7 @@ function medicalClaimsExportUrl({ employeeId = "" } = {}) {
 
 function renderLeaveAdjustmentHistory() {
   const adjustments = state.dashboard.leaveAdjustments || [];
-  if (!adjustments.length) return `<div class="empty">No leave adjustments recorded yet.</div>`;
+  if (!adjustments.length) return `<div class="empty">Leave adjustments will appear here after an admin applies one.</div>`;
 
   return `
     <div class="table-wrap">
@@ -2367,7 +2403,7 @@ function renderEmployees() {
             </div>
           `).join("")}
           </div>
-          <div class="empty" data-empty="employee-search" hidden>No employees match that search.</div>
+          <div class="empty" data-empty="employee-search" hidden>No employees match this search.</div>
         </div>
       </section>
       <section class="section">
@@ -2381,7 +2417,7 @@ function renderEmployees() {
 }
 
 function renderMailList(emails) {
-  if (!emails.length) return `<div class="empty">No email notifications yet.</div>`;
+  if (!emails.length) return `<div class="empty">Email notifications generated by leave and claim workflows will appear here.</div>`;
   return `
     <div>
       ${emails.map((email) => `
@@ -2402,7 +2438,7 @@ function renderMail() {
   renderShell(`
     ${renderTopbar("Email Outbox", "Email notifications generated by leave and claim workflows.")}
     <section class="section">
-      ${state.mail.loading && !emails.length ? `<div class="empty loading-state">Loading email notifications...</div>` : renderMailList(emails)}
+      ${state.mail.loading && !emails.length ? renderLoadingState("Loading email notifications", "list") : renderMailList(emails)}
       ${remaining > 0 ? `
         <div class="history-more">
           <button class="button small" data-action="mail-load-more">
@@ -2438,7 +2474,7 @@ function auditActionLabel(action) {
 }
 
 function renderAuditTable(events) {
-  if (!events.length) return `<div class="empty">No audit entries found.</div>`;
+  if (!events.length) return `<div class="empty">No audit entries match the current search.</div>`;
   return `
     <div class="table-wrap">
       <table>
@@ -2494,7 +2530,7 @@ function renderAuditLog() {
           </div>
         </div>
       </div>
-      ${state.audit.loading && !events.length ? `<div class="empty loading-state">Loading audit log...</div>` : renderAuditTable(events)}
+      ${state.audit.loading && !events.length ? renderLoadingState("Loading audit log", "table") : renderAuditTable(events)}
       ${remaining > 0 ? `
         <div class="history-more">
           <button class="button small" data-action="audit-load-more">
