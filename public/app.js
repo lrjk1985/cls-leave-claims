@@ -1505,7 +1505,15 @@ function renderEmployeeRecentRequests() {
             </article>
           `).join("")}
         </div>
-      ` : `<div class="empty">You're all caught up. New leave and claim requests will appear here.</div>`}
+      ` : `
+        <div class="empty">
+          You're all caught up. New leave and claim requests will appear here.
+          <div class="empty-actions">
+            <button class="button small" data-action="tab" data-tab="leave">Request Leave</button>
+            <button class="button small" data-action="tab" data-tab="claims">Submit Claim</button>
+          </div>
+        </div>
+      `}
     </section>
   `;
 }
@@ -1748,6 +1756,48 @@ function renderAdminReceiptStorage() {
   `;
 }
 
+function renderApprovalPreviewCards(kind, items) {
+  const isLeave = kind === "leave";
+  const emptyText = isLeave ? "No leave approvals need attention." : "No claim approvals need attention.";
+  if (!items.length) return `<div class="empty">${emptyText}</div>`;
+
+  return `
+    <div class="approval-preview-list">
+      ${items.map((item) => `
+        <article class="approval-preview-card">
+          <div class="approval-preview-main">
+            <span class="employee-request-kind">${isLeave ? "Leave request" : claimTypeLabel(item.claimType)}</span>
+            <h3>${escapeHtml(employeeName(item.employeeId))}</h3>
+            ${isLeave ? `
+              <div class="approval-preview-meta">
+                <span>${dateText(item.startDate)}${item.startDate === item.endDate ? "" : ` to ${dateText(item.endDate)}`}</span>
+                <span>${item.days} day${Number(item.days) === 1 ? "" : "s"}</span>
+                <span>${escapeHtml(item.type)}</span>
+              </div>
+              ${item.reason ? `<p class="muted">${escapeHtml(item.reason)}</p>` : ""}
+              ${excludedDatesText(item)}
+              ${renderMedicalCertificateLink(item)}
+            ` : `
+              <div class="approval-preview-meta">
+                <span>${dateText(item.claimDate)}</span>
+                <span>${money(item.amount)}</span>
+                <span>${escapeHtml(item.category)}</span>
+              </div>
+              <strong>${escapeHtml(item.provider)}</strong>
+              <p class="muted">${escapeHtml(item.description || "Claim awaiting review")}</p>
+              <div>${renderReceiptCell(item)}</div>
+            `}
+          </div>
+          <div class="approval-preview-actions">
+            ${statusPill(item.status)}
+            ${renderDecisionControls(kind, item)}
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderEmployeeOverview() {
   renderShell(`
     ${renderTopbar("Overview", "Your leave, medical leave, and claims in one calm view.")}
@@ -1789,7 +1839,7 @@ function renderOverview() {
             </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
-          ${pendingLeaves.length ? renderLeaveTable(pendingLeaves, true) : `<div class="empty">No leave approvals need attention.</div>`}
+          ${renderApprovalPreviewCards("leave", pendingLeaves)}
         </section>
         <section class="section management-section">
           <div class="section-header">
@@ -1799,7 +1849,7 @@ function renderOverview() {
             </div>
             <button class="button small" data-action="tab" data-tab="approvals">Review</button>
           </div>
-          ${pendingClaims.length ? renderClaimsTable(pendingClaims, true) : `<div class="empty">No claim approvals need attention.</div>`}
+          ${renderApprovalPreviewCards("claim", pendingClaims)}
         </section>
       </div>
       <section class="section">
@@ -2276,7 +2326,10 @@ function renderEmployees() {
     <div class="content-grid">
       <section class="section">
         <div class="section-header">
-          <h2 class="section-title">New Employee</h2>
+          <div>
+            <h2 class="section-title">New Employee</h2>
+            <p class="page-kicker">Annual + carry forward + birthday leave create the yearly total.</p>
+          </div>
         </div>
         <div class="section-body">
           <form class="form-grid three" data-form="employee">
@@ -2311,14 +2364,17 @@ function renderEmployees() {
             <div class="field">
               <label for="employee-leave">Set Initial Annual Leave Days</label>
               <input id="employee-leave" name="startingLeaveEntitlement" type="number" min="0" step="0.5" value="14">
+              <div class="field-hint">Base annual entitlement before carry forward, birthday leave, and admin adjustments.</div>
             </div>
             <div class="field">
               <label for="employee-carry-forward">Carry Forward Leave</label>
               <input id="employee-carry-forward" name="carriedForwardLeave" type="number" min="0" step="0.5" value="0">
+              <div class="field-hint">Unused leave brought into this leave year.</div>
             </div>
             <div class="field">
               <label for="employee-birthday-leave">Birthday Leave</label>
               <input id="employee-birthday-leave" name="birthdayLeaveEntitlement" type="number" min="0" step="0.5" value="0">
+              <div class="field-hint">Extra yearly leave granted by policy.</div>
             </div>
             <label class="field checkbox-field" for="employee-unlimited-annual-leave">
               <span>Unlimited Annual Leave</span>
@@ -2327,10 +2383,12 @@ function renderEmployees() {
             <div class="field">
               <label for="employee-medical-leave-entitlement">Medical Leave Days</label>
               <input id="employee-medical-leave-entitlement" name="medicalLeaveEntitlement" type="number" min="0" step="0.5" value="14">
+              <div class="field-hint">Initial yearly medical leave entitlement.</div>
             </div>
             <div class="field">
               <label for="employee-medical-limit">Medical Claim Limit</label>
               <input id="employee-medical-limit" name="medicalClaimLimit" type="number" min="0" step="0.01" value="500">
+              <div class="field-hint">Initial yearly claim cap. Balance is edited separately per employee.</div>
             </div>
             <div class="field">
               <label for="employee-password">Temporary Password</label>
@@ -2344,7 +2402,10 @@ function renderEmployees() {
       </section>
       <section class="section">
         <div class="section-header">
-          <h2 class="section-title">Employee Directory</h2>
+          <div>
+            <h2 class="section-title">Employee Directory</h2>
+            <p class="page-kicker">Use balance fields for what remains; use limit or entitlement fields for yearly starting amounts.</p>
+          </div>
           <div class="directory-tools">
             <label class="search-field" for="employee-search">
               <span>Search</span>
@@ -2692,7 +2753,6 @@ document.addEventListener("submit", async (event) => {
         body: JSON.stringify(body)
       });
       updateDashboard(data);
-      showToast("Signed in.");
     }
     if (formType === "leave") {
       const leavePayload = await leaveFormPayload(form, body);

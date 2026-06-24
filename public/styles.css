@@ -28,6 +28,7 @@
   --button-gradient-hover: linear-gradient(135deg, #e86f45 0%, #4865d9 100%);
   --shadow: 0 18px 42px rgba(58, 49, 84, 0.1);
   --shadow-hover: 0 22px 48px rgba(58, 49, 84, 0.14);
+  --tap-target: 44px;
   --motion-fast: 140ms;
   --motion-medium: 220ms;
   --motion-slow: 320ms;
@@ -242,7 +243,7 @@ textarea {
 .nav-button {
   position: relative;
   width: 100%;
-  min-height: 42px;
+  min-height: var(--tap-target);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -860,6 +861,8 @@ textarea {
 
 .checkbox-field {
   align-content: end;
+  min-height: var(--tap-target);
+  cursor: pointer;
 }
 
 .checkbox-field input[type="checkbox"] {
@@ -887,7 +890,7 @@ input,
 select,
 textarea {
   width: 100%;
-  min-height: 42px;
+  min-height: var(--tap-target);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
@@ -948,7 +951,7 @@ input[type="file"]::file-selector-button:hover {
 
 .button {
   position: relative;
-  min-height: 42px;
+  min-height: var(--tap-target);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1005,14 +1008,14 @@ input[type="file"]::file-selector-button:hover {
 }
 
 .button.small {
-  min-height: 34px;
+  min-height: var(--tap-target);
   padding: 7px 10px;
   font-size: 13px;
 }
 
 .icon-button {
-  width: 36px;
-  height: 36px;
+  width: var(--tap-target);
+  height: var(--tap-target);
   display: inline-grid;
   place-items: center;
   border-radius: 8px;
@@ -1418,7 +1421,7 @@ tr:last-child td {
 
 .employee-row input,
 .employee-row select {
-  min-height: 38px;
+  min-height: var(--tap-target);
 }
 
 .employee-row[hidden] {
@@ -1501,6 +1504,7 @@ tr:last-child td {
 
 .action-menu-list .button {
   width: 100%;
+  min-height: calc(var(--tap-target) + 2px);
   justify-content: flex-start;
   background: transparent;
 }
@@ -1509,11 +1513,65 @@ tr:last-child td {
   background: var(--primary-soft);
 }
 
+.approval-preview-list {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.approval-preview-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto);
+  gap: 14px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  transition:
+    border-color var(--motion-medium) var(--ease-standard),
+    box-shadow var(--motion-medium) var(--ease-standard),
+    transform var(--motion-medium) var(--ease-out);
+}
+
+.approval-preview-main {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.approval-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.approval-preview-actions {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.approval-preview-actions .decision-box {
+  width: min(180px, 100%);
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 @media (hover: hover) {
   .metric:hover,
   .employee-ring-card:hover,
   .feature-ring-card:hover,
   .employee-request-card:hover,
+  .approval-preview-card:hover,
   .employee-row:hover {
     border-color: rgba(93, 124, 250, 0.28);
     box-shadow: var(--shadow-hover);
@@ -1650,6 +1708,67 @@ tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  .sidebar {
+    gap: 14px;
+    padding: 18px 22px;
+  }
+
+  .sidebar .brand {
+    gap: 10px;
+  }
+
+  .sidebar .brand-mark {
+    width: 44px;
+    height: 44px;
+  }
+
+  .profile-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 12px;
+  }
+
+  .profile-email {
+    margin-top: 2px;
+  }
+
+  .role-pill {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    margin-top: 0;
+  }
+
+  .nav-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .nav-button {
+    justify-content: center;
+    padding-inline: 10px;
+    text-align: center;
+  }
+
+  .nav-button::before {
+    inset: 8px auto 8px 0;
+  }
+
+  .nav-button .badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+  }
+
+  .sidebar-quote {
+    display: none;
+  }
+
   .toast-stack {
     right: 14px;
     bottom: 14px;
@@ -1768,6 +1887,18 @@ tr:last-child td {
   }
 
   .decision-box {
+    width: 100%;
+  }
+
+  .approval-preview-card {
+    grid-template-columns: 1fr;
+  }
+
+  .approval-preview-actions {
+    justify-items: stretch;
+  }
+
+  .approval-preview-actions .decision-box {
     width: 100%;
   }
 
