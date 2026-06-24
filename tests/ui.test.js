@@ -44,3 +44,9 @@ test("mobile navigation is compact without removing destinations", () => {
     assert.match(appSource, new RegExp(`renderNavButton\\("${tab}"`));
   });
 });
+
+test("medical claim export controls align across fields and actions", () => {
+  assert.match(appSource, /<div class="form-grid three export-controls">/);
+  assert.match(cssSource, /\.export-controls\s*\{[\s\S]*?align-items:\s*end;/);
+  assert.match(cssSource, /\.export-actions\s*\{[\s\S]*?align-self:\s*end;/);
+});

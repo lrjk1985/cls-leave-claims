@@ -854,6 +854,14 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.export-controls {
+  align-items: end;
+}
+
+.export-actions {
+  align-self: end;
+}
+
 .field {
   display: grid;
   gap: 7px;

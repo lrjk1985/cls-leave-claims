@@ -1931,7 +1931,7 @@ function renderClaimsExportPanel() {
         <h2 class="section-title">Medical Claim Exports</h2>
       </div>
       <div class="section-body">
-        <div class="form-grid three">
+        <div class="form-grid three export-controls">
           <div class="field">
             <label for="medical-claims-export-year">Year</label>
             <input id="medical-claims-export-year" data-export-field="medical-claims-year" type="number" min="2000" max="2100" step="1" value="${currentYearText()}">
@@ -1945,7 +1945,7 @@ function renderClaimsExportPanel() {
               `).join("")}
             </select>
           </div>
-          <div class="field actions">
+          <div class="field actions export-actions">
             <button class="button" type="button" data-action="export-medical-claims-employee">Export Employee</button>
             <button class="button primary" type="button" data-action="export-medical-claims-all">Export All</button>
           </div>
