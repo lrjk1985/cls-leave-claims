@@ -3052,6 +3052,25 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
       const combinedEntitlementOverride = hospitalizationGrant
         ? Number(hospitalizationGrant.overrideDays ?? hospitalizationGrant.baseDays)
         : undefined;
+      const nationalServiceRequests = db.leaveRequests.filter(
+        (request) =>
+          request.employeeId === employee.id &&
+          request.type === LEAVE_TYPES.NATIONAL_SERVICE &&
+          Number(request.leaveYear || String(request.startDate || "").slice(0, 4)) === year
+      );
+
+      const publicEntitlements = entitlements.map((entitlement) => {
+        const { childBirthDate, ...publicEntitlement } = entitlement;
+        return {
+          ...publicEntitlement,
+          ...(canAdmin(viewer) ? { childBirthDate } : {}),
+          summary: entitlementSummary(
+            entitlement,
+            db.leaveRequests,
+            db.leaveEntitlementAdjustments || []
+          )
+        };
+      });
 
       return {
         employeeId: employee.id,
@@ -3060,14 +3079,16 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
           asOfDate,
           combinedEntitlementOverride
         }),
-        entitlements: entitlements.map((entitlement) => ({
-          ...entitlement,
-          summary: entitlementSummary(
-            entitlement,
-            db.leaveRequests,
-            db.leaveEntitlementAdjustments || []
-          )
-        }))
+        nationalService: {
+          year,
+          approved: nationalServiceRequests
+            .filter((request) => request.status === "approved")
+            .reduce((total, request) => total + Number(request.days || 0), 0),
+          pending: nationalServiceRequests
+            .filter((request) => request.status === "pending")
+            .reduce((total, request) => total + Number(request.days || 0), 0)
+        },
+        entitlements: publicEntitlements
       };
     });
 }

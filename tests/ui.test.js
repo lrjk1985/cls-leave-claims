@@ -93,3 +93,40 @@ test("entitlement management is responsive and unframed", () => {
   assert.match(cssSource, /\.entitlement-grid\s*\{[\s\S]*grid-template-columns/);
   assert.match(cssSource, /@media \(max-width:\s*640px\) \{[\s\S]*\.entitlement-grid\s*\{[\s\S]*grid-template-columns:\s*1fr/);
 });
+
+test("employee leave view explains special entitlement balances", () => {
+  const summarySource = appSource.slice(
+    appSource.indexOf("function renderEmployeeEntitlementSummaries"),
+    appSource.indexOf("function renderClaimPageRings")
+  );
+  assert.match(appSource, /function renderEmployeeEntitlementSummaries/);
+  ["Entitlement", "Approved", "Pending", "Remaining", "Expiry"].forEach((label) => {
+    assert.match(appSource, new RegExp(label));
+  });
+  assert.match(appSource, /Unavailable/);
+  assert.match(appSource, /Days taken/);
+  assert.match(appSource, /Maternity Leave[\s\S]*weeks/);
+  assert.doesNotMatch(summarySource, /Child Date of Birth/);
+});
+
+test("leave request form previews usage and blocks clearly unavailable grants", () => {
+  assert.match(appSource, /data-leave-estimate/);
+  assert.match(appSource, /Expected remaining/);
+  assert.match(appSource, /function updateLeaveRequestEstimate/);
+  assert.match(appSource, /data-entitlement-blocked/);
+});
+
+test("approvers see entitlement context without changed decision controls", () => {
+  assert.match(appSource, /function renderLeaveApprovalContext/);
+  assert.match(appSource, /Eligibility verified/);
+  assert.match(appSource, /Linked period/);
+  assert.match(appSource, /Supporting document/);
+  assert.match(appSource, /Balance after approval/);
+  assert.match(appSource, /renderDecisionControls\("leave", item\)/);
+});
+
+test("employee entitlement summaries stay compact on mobile", () => {
+  assert.match(cssSource, /\.employee-entitlement-summary\s*\{/);
+  assert.match(cssSource, /\.leave-estimate\s*\{/);
+  assert.match(cssSource, /@media \(max-width:\s*640px\) \{[\s\S]*\.employee-entitlement-facts\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,/);
+});

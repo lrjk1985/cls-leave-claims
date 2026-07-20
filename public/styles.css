@@ -41,6 +41,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--page-gradient);
@@ -829,6 +833,120 @@ textarea {
 
 .section-body {
   padding: 20px;
+}
+
+.employee-entitlement-summary {
+  overflow: hidden;
+}
+
+.employee-entitlement-list {
+  padding: 0 20px;
+}
+
+.employee-entitlement-item {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.employee-entitlement-item:last-child {
+  border-bottom: 0;
+}
+
+.employee-entitlement-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.employee-entitlement-heading span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.employee-entitlement-facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.employee-entitlement-facts div,
+.leave-approval-context div {
+  min-width: 0;
+}
+
+.employee-entitlement-facts dt,
+.leave-approval-context dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.employee-entitlement-facts dd,
+.leave-approval-context dd {
+  margin: 3px 0 0;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.entitlement-unavailable {
+  margin: 0;
+  color: var(--red);
+  font-weight: 700;
+}
+
+.leave-estimate {
+  display: grid;
+  gap: 3px;
+  min-height: var(--tap-target);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--primary-soft);
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard);
+}
+
+.leave-estimate span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.leave-estimate strong {
+  color: var(--ink);
+}
+
+.leave-estimate[data-entitlement-blocked="true"] {
+  border-color: rgba(217, 95, 118, 0.38);
+  background: var(--red-2);
+}
+
+.leave-estimate[data-entitlement-blocked="true"] strong,
+.leave-estimate[data-entitlement-blocked="true"] span {
+  color: var(--red);
+}
+
+.leave-approval-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.leave-approval-context dd {
+  font-size: 12px;
+}
+
+.table-wrap .leave-approval-context {
+  grid-template-columns: 1fr;
 }
 
 .detail-grid {
@@ -2048,6 +2166,23 @@ tr:last-child td {
   }
 
   .employee-row {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-entitlement-heading {
+    display: grid;
+    gap: 4px;
+  }
+
+  .employee-entitlement-heading span {
+    text-align: left;
+  }
+
+  .employee-entitlement-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .leave-approval-context {
     grid-template-columns: 1fr;
   }
 

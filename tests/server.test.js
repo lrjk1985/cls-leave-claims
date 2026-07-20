@@ -914,6 +914,21 @@ test("dashboard exposes shadow summaries while disabled policy does not require 
       updatedAt: "2026-07-20T00:00:00.000Z",
       updatedBy: null
     }],
+    leaveEntitlements: [{
+      id: "ent_childcare_2026",
+      employeeId: employee.id,
+      leaveType: "Childcare Leave",
+      periodKind: "annual",
+      periodYear: 2026,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+      baseDays: 6,
+      overrideDays: null,
+      eligibilityVerified: true,
+      workScheduleSnapshot: [1, 2, 3, 4, 5],
+      childBirthDate: "2021-03-04",
+      active: true
+    }],
     emails: []
   });
 
@@ -923,6 +938,15 @@ test("dashboard exposes shadow summaries while disabled policy does not require 
   ).enforcementEnabled, false);
   assert.equal(payload.leaveEntitlementSummaries[0].employeeId, employee.id);
   assert.ok(payload.leaveEntitlementSummaries[0].medicalHospitalization);
+  assert.deepEqual(payload.leaveEntitlementSummaries[0].nationalService, {
+    year: 2026,
+    approved: 0,
+    pending: 0
+  });
+  assert.equal(
+    Object.hasOwn(payload.leaveEntitlementSummaries[0].entitlements[0], "childBirthDate"),
+    false
+  );
 
   const request = await __test.createLeaveRequest(db, employee, {
     type: "Compassionate Leave",

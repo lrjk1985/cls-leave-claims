@@ -1619,6 +1619,120 @@ function renderLeavePageRings() {
   `;
 }
 
+const EMPLOYEE_ENTITLEMENT_TYPES = [
+  "Hospitalization Leave",
+  "Compassionate Leave",
+  "Paternity Leave",
+  "Maternity Leave",
+  "Childcare Leave",
+  "National Service Leave"
+];
+
+function entitlementForType(bundle, type, date = todayIso()) {
+  const normalizedType = String(type || "").toLowerCase();
+  return (bundle?.entitlements || []).find((entitlement) =>
+    entitlement.active !== false &&
+    String(entitlement.leaveType || "").toLowerCase() === normalizedType &&
+    (!entitlement.validFrom || date >= entitlement.validFrom) &&
+    (!entitlement.validUntil || date <= entitlement.validUntil)
+  ) || null;
+}
+
+function entitlementUnavailableReason(type, entitlement, date = todayIso()) {
+  if (!leavePolicyEnforcementEnabled(type)) return "";
+  if (!entitlement) return "No active entitlement has been verified for this period.";
+  if (entitlement.active === false) return "This entitlement is inactive.";
+  if (entitlement.validFrom && date < entitlement.validFrom) return `Available from ${dateText(entitlement.validFrom)}.`;
+  if (entitlement.validUntil && date > entitlement.validUntil) return `Expired ${dateText(entitlement.validUntil)}.`;
+  if (["Paternity Leave", "Maternity Leave", "Childcare Leave"].includes(type) && !entitlement.eligibilityVerified) {
+    return "Eligibility has not been verified by HR.";
+  }
+  return "";
+}
+
+function renderEmployeeEntitlementFacts(facts) {
+  return `
+    <dl class="employee-entitlement-facts">
+      ${facts.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+    </dl>
+  `;
+}
+
+function renderEmployeeEntitlementSummaries() {
+  const bundle = employeeEntitlementBundle(state.dashboard.user.id);
+  const medical = bundle.medicalHospitalization;
+  return `
+    <section class="section employee-entitlement-summary" aria-labelledby="special-entitlements-title">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title" id="special-entitlements-title">Special Leave Entitlements</h2>
+          <p class="page-kicker">These balances are tracked separately from annual leave.</p>
+        </div>
+      </div>
+      <div class="employee-entitlement-list">
+        ${EMPLOYEE_ENTITLEMENT_TYPES.map((type) => {
+          if (type === "National Service Leave") {
+            const summary = bundle.nationalService || { approved: 0, pending: 0 };
+            return `
+              <article class="employee-entitlement-item">
+                <div class="employee-entitlement-heading"><strong>${type}</strong><span>Uncapped</span></div>
+                ${renderEmployeeEntitlementFacts([
+                  ["Days taken", displayNumber(summary.approved)],
+                  ["Pending", displayNumber(summary.pending)],
+                  ["Supporting document", leavePolicyEnforcementEnabled(type) ? "Required" : "Reviewed on submission"]
+                ])}
+              </article>
+            `;
+          }
+
+          if (type === "Hospitalization Leave") {
+            const summary = medical?.combined || {};
+            return `
+              <article class="employee-entitlement-item">
+                <div class="employee-entitlement-heading"><strong>${type}</strong><span>Combined medical pool</span></div>
+                ${renderEmployeeEntitlementFacts([
+                  ["Entitlement", displayNumber(summary.entitlement)],
+                  ["Approved", displayNumber(summary.approved)],
+                  ["Pending", displayNumber(summary.pending)],
+                  ["Remaining", displayNumber(summary.unreserved)],
+                  ["Expiry", `31 Dec ${medical?.year || currentYearText()}`]
+                ])}
+              </article>
+            `;
+          }
+
+          const entitlement = entitlementForType(bundle, type);
+          const summary = entitlement?.summary || {};
+          const unavailable = entitlementUnavailableReason(type, entitlement);
+          const entitlementValue = type === "Maternity Leave" && entitlement
+            ? `${displayNumber(Number(summary.entitlement || entitlement.baseDays) / 7)} weeks (${displayNumber(summary.entitlement || entitlement.baseDays)} days)`
+            : displayNumber(summary.entitlement || entitlement?.baseDays || 0);
+          const validity = entitlement
+            ? `${dateText(entitlement.validFrom)} to ${entitlement.validUntil ? dateText(entitlement.validUntil) : "No expiry"}`
+            : leavePolicyEnforcementEnabled(type) ? "Not available" : "Confirmed during approval";
+          return `
+            <article class="employee-entitlement-item" ${unavailable ? `data-entitlement-blocked="true"` : ""}>
+              <div class="employee-entitlement-heading">
+                <strong>${type}</strong>
+                <span>${unavailable ? "Unavailable" : validity}</span>
+              </div>
+              ${renderEmployeeEntitlementFacts([
+                ["Entitlement", entitlementValue],
+                ["Approved", displayNumber(summary.approved)],
+                ["Pending", displayNumber(summary.pending)],
+                ["Remaining", displayNumber(summary.unreserved)],
+                ["Expiry", entitlement?.validUntil ? dateText(entitlement.validUntil) : "-"]
+              ])}
+              ${type === "Maternity Leave" && entitlement ? `<p class="muted">Grant period: ${validity}</p>` : ""}
+              ${unavailable ? `<p class="entitlement-unavailable">${escapeHtml(unavailable)}</p>` : ""}
+            </article>
+          `;
+        }).join("")}
+      </div>
+    </section>
+  `;
+}
+
 function renderClaimPageRings() {
   const summary = state.dashboard.medicalClaimSummary;
   const generalSummary = state.dashboard.generalClaimSummary || { pending: 0, approved: 0 };
@@ -1824,6 +1938,7 @@ function renderApprovalPreviewCards(kind, items) {
               ${item.reason ? `<p class="muted">${escapeHtml(item.reason)}</p>` : ""}
               ${excludedDatesText(item)}
               ${renderMedicalCertificateLink(item)}
+              ${renderLeaveApprovalContext(item)}
             ` : `
               <div class="approval-preview-meta">
                 <span>${dateText(item.claimDate)}</span>
@@ -1910,6 +2025,124 @@ function renderOverview() {
   `);
 }
 
+function estimatedLeaveDays(startDate, endDate, schedule, calendarDays = false) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
+    return null;
+  }
+  const workdays = new Set(schedule || [1, 2, 3, 4, 5]);
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  let days = 0;
+  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const isoWeekday = cursor.getUTCDay() || 7;
+    if (calendarDays || workdays.has(isoWeekday)) days += 1;
+  }
+  return days;
+}
+
+function leaveRequestBalanceContext(type, startDate) {
+  const bundle = employeeEntitlementBundle(state.dashboard.user.id);
+  if (isNationalServiceLeave(type) || type === "Unpaid Leave") {
+    return { capped: false, remaining: null, unavailable: "", entitlement: null };
+  }
+  if (isMedicalLeaveType(type)) {
+    const summary = leavePolicyEnforcementEnabled(type)
+      ? bundle.medicalHospitalization?.outpatient
+      : state.dashboard.medicalLeaveSummary;
+    const remaining = summary?.unreserved ?? Number(summary?.available || 0) - Number(summary?.pending || 0);
+    return { capped: true, remaining, unavailable: "", entitlement: null };
+  }
+  if (type === "Hospitalization Leave") {
+    if (!leavePolicyEnforcementEnabled(type)) return { capped: false, remaining: null, unavailable: "", entitlement: null };
+    return {
+      capped: true,
+      remaining: bundle.medicalHospitalization?.combined?.unreserved ?? 0,
+      unavailable: "",
+      entitlement: null
+    };
+  }
+  if (["Compassionate Leave", "Paternity Leave", "Maternity Leave", "Childcare Leave"].includes(type)) {
+    const entitlement = entitlementForType(bundle, type, startDate);
+    const unavailable = entitlementUnavailableReason(type, entitlement, startDate);
+    if (!leavePolicyEnforcementEnabled(type) && !entitlement) {
+      return { capped: false, remaining: null, unavailable: "", entitlement: null };
+    }
+    return {
+      capped: true,
+      remaining: entitlement?.summary?.unreserved ?? 0,
+      unavailable,
+      entitlement
+    };
+  }
+  if (type === "Annual Leave" || type === "Urgent Leave") {
+    return {
+      capped: !state.dashboard.user.unlimitedAnnualLeave,
+      remaining: state.dashboard.leaveSummary?.available ?? 0,
+      unavailable: "",
+      entitlement: null
+    };
+  }
+  return { capped: false, remaining: null, unavailable: "", entitlement: null };
+}
+
+function updateLeaveRequestEstimate(form) {
+  const estimate = form.querySelector("[data-leave-estimate]");
+  const submit = form.querySelector("button[type='submit']");
+  const type = form.querySelector("select[name='type']")?.value || "Annual Leave";
+  const startDate = form.querySelector("input[name='startDate']")?.value || "";
+  const endDate = form.querySelector("input[name='endDate']")?.value || "";
+  if (!estimate || !submit) return;
+
+  estimate.dataset.entitlementBlocked = "false";
+  submit.disabled = false;
+  if (!startDate || !endDate) {
+    estimate.innerHTML = `<strong>Request estimate</strong><span>Choose start and end dates to preview usage.</span>`;
+    return;
+  }
+  if (startDate > endDate) {
+    estimate.dataset.entitlementBlocked = "true";
+    estimate.innerHTML = `<strong>Unavailable</strong><span>End date must be on or after the start date.</span>`;
+    submit.disabled = true;
+    return;
+  }
+
+  const context = leaveRequestBalanceContext(type, startDate);
+  const usesCalendarDays = type === "Maternity Leave" && Boolean(context.entitlement);
+  const usesEmployeeSchedule = isMedicalLeaveType(type) ||
+    type === "Hospitalization Leave" ||
+    isNationalServiceLeave(type) ||
+    Boolean(context.entitlement);
+  const schedule = context.entitlement?.workScheduleSnapshot ||
+    (usesEmployeeSchedule ? state.dashboard.user.workSchedule : [1, 2, 3, 4, 5]);
+  const days = estimatedLeaveDays(startDate, endDate, schedule, usesCalendarDays);
+  let unavailable = context.unavailable;
+  if (
+    type === "Maternity Leave" &&
+    context.entitlement &&
+    (startDate !== context.entitlement.validFrom || endDate !== context.entitlement.validUntil)
+  ) {
+    unavailable = "Maternity Leave dates must match the verified grant period exactly.";
+  }
+  if (!unavailable && context.capped && Number(days) > Number(context.remaining)) {
+    unavailable = `This estimate exceeds the ${displayNumber(context.remaining)} days currently remaining.`;
+  }
+
+  if (unavailable) {
+    estimate.dataset.entitlementBlocked = "true";
+    estimate.innerHTML = `<strong>Unavailable</strong><span>${escapeHtml(unavailable)}</span>`;
+    submit.disabled = true;
+    return;
+  }
+
+  const remaining = context.capped
+    ? `${displayNumber(Number(context.remaining) - Number(days))} days`
+    : "Not capped";
+  estimate.innerHTML = `
+    <strong>${displayNumber(days)} ${usesCalendarDays ? "calendar" : "scheduled"} day${Number(days) === 1 ? "" : "s"}</strong>
+    <span>Expected remaining: ${escapeHtml(remaining)}. Public holiday exclusions are confirmed when submitted.</span>
+  `;
+}
+
 function renderLeave() {
   const leaveRequests = state.dashboard.leaveRequests;
   const pendingLeaves = leaveRequests.filter((item) => item.status === "pending");
@@ -1917,6 +2150,7 @@ function renderLeave() {
     ${renderTopbar("Leave", "Apply for leave and track your leave request history.")}
     <div class="content-grid">
       ${renderLeavePageRings()}
+      ${renderEmployeeEntitlementSummaries()}
       <section class="section feature-form-card">
         <div class="section-header">
           <div>
@@ -1959,6 +2193,12 @@ function renderLeave() {
               <label for="leave-reason">Reason</label>
               <textarea id="leave-reason" name="reason" placeholder="Brief reason for this leave request"></textarea>
             </div>
+            <div class="field full">
+              <div class="leave-estimate" data-leave-estimate data-entitlement-blocked="false" role="status" aria-live="polite">
+                <strong>Request estimate</strong>
+                <span>Choose start and end dates to preview usage.</span>
+              </div>
+            </div>
             <div class="field full actions">
               <button class="button primary" type="submit">Submit Leave</button>
             </div>
@@ -1974,6 +2214,10 @@ function renderLeave() {
       ${renderHistorySection("leave")}
     </div>
   `);
+  requestAnimationFrame(() => {
+    const form = document.querySelector("form[data-form='leave']");
+    if (form) updateLeaveRequestEstimate(form);
+  });
 }
 
 function renderClaimsExportPanel() {
@@ -2167,6 +2411,49 @@ function renderMedicalCertificateLink(item) {
   `;
 }
 
+function renderLeaveApprovalContext(item) {
+  const bundle = employeeEntitlementBundle(item.employeeId);
+  const entitlement = (bundle.entitlements || []).find((entry) => entry.id === item.entitlementId) || null;
+  const medicalType = isMedicalLeaveType(item.type);
+  const hospitalizationType = item.type === "Hospitalization Leave";
+  const nationalServiceType = isNationalServiceLeave(item.type);
+  const pool = medicalType
+    ? bundle.medicalHospitalization?.outpatient
+    : hospitalizationType
+      ? bundle.medicalHospitalization?.combined
+      : null;
+  const summary = entitlement?.summary || pool;
+  const balanceAfterApproval = nationalServiceType
+    ? "Uncapped"
+    : summary
+      ? `${displayNumber(Number(summary.available || 0) - Number(item.days || 0))} days`
+      : "Not capped by this policy";
+  const eligibility = entitlement
+    ? entitlement.eligibilityVerified ? "Yes" : "No"
+    : ["Paternity Leave", "Maternity Leave", "Childcare Leave"].includes(item.type)
+      ? "No linked entitlement"
+      : "Not required";
+  const linkedPeriod = entitlement
+    ? `${dateText(entitlement.validFrom)} to ${entitlement.validUntil ? dateText(entitlement.validUntil) : "No expiry"}`
+    : pool
+      ? `Calendar year ${bundle.medicalHospitalization?.year || item.leaveYear}`
+      : nationalServiceType
+        ? `${dateText(item.startDate)} to ${dateText(item.endDate)}`
+        : "Not linked";
+  const documentAttached = Boolean(item.medicalCertificate?.storedName || item.supportingDocument?.storedName);
+  const documentRequired = requiresMedicalCertificate(item.type) ||
+    (nationalServiceType && leavePolicyEnforcementEnabled(item.type));
+
+  return `
+    <dl class="leave-approval-context" aria-label="Entitlement context">
+      <div><dt>Eligibility verified</dt><dd>${escapeHtml(eligibility)}</dd></div>
+      <div><dt>Linked period</dt><dd>${escapeHtml(linkedPeriod)}</dd></div>
+      <div><dt>Supporting document</dt><dd>${documentAttached ? "Attached" : documentRequired ? "Missing" : "Not required"}</dd></div>
+      <div><dt>Balance after approval</dt><dd>${escapeHtml(balanceAfterApproval)}</dd></div>
+    </dl>
+  `;
+}
+
 function renderLeaveTable(items, approvalsMode) {
   if (!items.length) return `<div class="empty">No leave requests match the current view.</div>`;
   return `
@@ -2198,6 +2485,7 @@ function renderLeaveTable(items, approvalsMode) {
               <td data-label="Type">
                 ${escapeHtml(item.type)}
                 ${renderMedicalCertificateLink(item)}
+                ${approvalsMode ? renderLeaveApprovalContext(item) : ""}
               </td>
               <td data-label="Status">${statusPill(item.status)}</td>
               <td data-label="${approvalsMode ? "Decision" : "Approver"}">
@@ -3023,7 +3311,10 @@ document.addEventListener("submit", async (event) => {
     showToast(error.message, "error");
   } finally {
     state.busy = false;
-    if (form.isConnected) setFormSubmitting(form, false);
+    if (form.isConnected) {
+      setFormSubmitting(form, false);
+      if (formType === "leave") updateLeaveRequestEstimate(form);
+    }
   }
 });
 
@@ -3225,6 +3516,9 @@ document.addEventListener("click", async (event) => {
       return;
     }
   } catch (error) {
+    if (action === "decide" && button.dataset.kind === "leave") {
+      await refreshDashboard().catch(() => {});
+    }
     showToast(error.message, "error");
   }
 });
@@ -3289,9 +3583,12 @@ function updateHistoryFilter(field) {
 }
 
 document.addEventListener("change", (event) => {
-  const leaveType = event.target.closest("form[data-form='leave'] select[name='type']");
-  if (leaveType) {
-    updateMedicalCertificateField(leaveType.form);
+  const leaveField = event.target.closest(
+    "form[data-form='leave'] select[name='type'], form[data-form='leave'] input[name='startDate'], form[data-form='leave'] input[name='endDate']"
+  );
+  if (leaveField) {
+    if (leaveField.name === "type") updateMedicalCertificateField(leaveField.form);
+    updateLeaveRequestEstimate(leaveField.form);
     return;
   }
 
