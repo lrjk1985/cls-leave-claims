@@ -308,6 +308,29 @@ begin
       message = 'CLS_LEAVE_CAP: linked leave entitlement eligibility is not verified';
   end if;
 
+  if new.type = 'Maternity Leave' then
+    if new.start_date <> v_entitlement_from
+      or v_entitlement_until is null
+      or new.end_date <> v_entitlement_until then
+      raise exception using
+        errcode = 'P0001',
+        message = 'CLS_LEAVE_CAP: Maternity Leave request must match the approved grant period';
+    end if;
+
+    select count(*)
+    into v_entitlement_reserved
+    from public.cls_leave_requests
+    where entitlement_id = new.entitlement_id
+      and status in ('pending', 'approved')
+      and id is distinct from new.id;
+
+    if v_entitlement_reserved > 0 then
+      raise exception using
+        errcode = 'P0001',
+        message = 'CLS_LEAVE_CAP: Maternity Leave entitlement already has an active request';
+    end if;
+  end if;
+
   select
     v_entitlement_cap
       + coalesce((

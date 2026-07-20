@@ -1341,6 +1341,106 @@ test("enabled Compassionate enforcement requires an active grant and reserves pe
   }), /Compassionate Leave balance has only 0 days remaining/);
 });
 
+test("Paternity requests use the verified grant schedule snapshot and expiry", async () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    active: true,
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({
+    users: [admin, employee],
+    leavePolicySettings: [{
+      leaveType: "Paternity Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }],
+    leaveRequests: [],
+    emails: []
+  });
+  const grant = __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Paternity Leave",
+    eventDate: "2026-07-20",
+    eligibilityVerified: true
+  });
+  assert.equal(grant.baseDays, 20);
+  __test.setEmployeeWorkSchedule(db, admin, employee.id, [1, 2, 3, 4, 5, 6]);
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Paternity Leave",
+    startDate: "2026-07-20",
+    endDate: "2026-07-25",
+    reason: "New child"
+  });
+  assert.equal(request.days, 5);
+  assert.deepEqual(request.workScheduleSnapshot, [1, 2, 3, 4, 5]);
+  assert.equal(request.entitlementId, grant.id);
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "Paternity Leave",
+    startDate: "2027-07-21",
+    endDate: "2027-07-21"
+  }), /active Paternity Leave entitlement is required/);
+});
+
+test("Maternity requests must match one verified 112-day grant block", async () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    active: true,
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01"
+  };
+  const db = __test.normalizeDb({
+    users: [admin, employee],
+    leavePolicySettings: [{
+      leaveType: "Maternity Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }],
+    leaveRequests: [],
+    emails: []
+  });
+  const grant = __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Maternity Leave",
+    validFrom: "2026-07-20",
+    validUntil: "2026-11-08",
+    eligibilityVerified: true
+  });
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "Maternity Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-11-08"
+  }), /must match the approved 112-day grant period/);
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Maternity Leave",
+    startDate: "2026-07-20",
+    endDate: "2026-11-08",
+    reason: "Maternity period"
+  });
+  assert.equal(request.days, 112);
+  assert.equal(request.countingMethod, "calendar_days");
+  assert.equal(request.entitlementId, grant.id);
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "Maternity Leave",
+    startDate: "2026-07-20",
+    endDate: "2026-11-08"
+  }), /already has an active request/);
+});
+
 test("createClaim routes claims to the separate claims approver", async () => {
   const employee = {
     id: "usr_employee",

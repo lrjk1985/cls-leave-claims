@@ -20,6 +20,8 @@ test("leave entitlement rollout creates secured additive schema", () => {
   assert.match(sql, /for update/i);
   assert.match(sql, /before insert or update on public\.cls_leave_requests/i);
   assert.match(sql, /security invoker/i);
+  assert.match(sql, /new\.type = 'Maternity Leave'[\s\S]*new\.start_date <> v_entitlement_from/i);
+  assert.match(sql, /Maternity Leave entitlement already has an active request/i);
 });
 
 const supabaseTestUrl = process.env.SUPABASE_TEST_URL;

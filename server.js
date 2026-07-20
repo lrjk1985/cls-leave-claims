@@ -3642,29 +3642,51 @@ async function createLeaveRequest(db, user, body) {
   leaveDayBreakdown(startDate, endDate);
   const leaveYear = Number(startDate.slice(0, 4));
   const annualEntitlementType = type === LEAVE_TYPES.COMPASSIONATE || type === LEAVE_TYPES.CHILDCARE;
+  const eventEntitlementType = type === LEAVE_TYPES.PATERNITY || type === LEAVE_TYPES.MATERNITY;
   let linkedEntitlement = null;
-  if (annualEntitlementType && policyEnforcementEnabled(db, type)) {
+  if ((annualEntitlementType || eventEntitlementType) && policyEnforcementEnabled(db, type)) {
     linkedEntitlement = findActiveEntitlement(db.leaveEntitlements || [], {
       employeeId: user.id,
       leaveType: type,
       date: startDate,
       year: leaveYear,
-      eligibilityRequired: type === LEAVE_TYPES.CHILDCARE
+      eligibilityRequired: type === LEAVE_TYPES.CHILDCARE || eventEntitlementType
     });
     if (!linkedEntitlement || (linkedEntitlement.validUntil && endDate > linkedEntitlement.validUntil)) {
       throw new Error(`An active ${type} entitlement is required for these dates.`);
+    }
+    if (
+      type === LEAVE_TYPES.MATERNITY &&
+      (startDate !== linkedEntitlement.validFrom || endDate !== linkedEntitlement.validUntil)
+    ) {
+      throw new Error("Maternity Leave dates must match the approved 112-day grant period exactly.");
+    }
+    if (
+      type === LEAVE_TYPES.MATERNITY &&
+      db.leaveRequests.some(
+        (request) =>
+          request.entitlementId === linkedEntitlement.id &&
+          ["pending", "approved"].includes(request.status)
+      )
+    ) {
+      throw new Error("This Maternity Leave entitlement already has an active request.");
     }
   }
 
   const publicHolidays = await getSingaporePublicHolidaysForRange(startDate, endDate);
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
-  const usesScheduleSnapshot = isMedicalLeave || isHospitalizationLeave || Boolean(linkedEntitlement);
-  const workScheduleSnapshot = usesScheduleSnapshot
+  const usesCalendarDays = type === LEAVE_TYPES.MATERNITY && Boolean(linkedEntitlement);
+  const usesScheduleSnapshot = !usesCalendarDays && (
+    isMedicalLeave || isHospitalizationLeave || Boolean(linkedEntitlement)
+  );
+  const workScheduleSnapshot = linkedEntitlement || usesScheduleSnapshot
     ? normalizeWorkSchedule(linkedEntitlement?.workScheduleSnapshot || user.workSchedule)
     : null;
-  const days = usesScheduleSnapshot
-    ? scheduledDaysBetween(startDate, endDate, workScheduleSnapshot, publicHolidays)
-    : breakdown.days;
+  const days = usesCalendarDays
+    ? calendarDaysBetween(startDate, endDate)
+    : usesScheduleSnapshot
+      ? scheduledDaysBetween(startDate, endDate, workScheduleSnapshot, publicHolidays)
+      : breakdown.days;
 
   if (days <= 0) {
     throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
@@ -3718,11 +3740,11 @@ async function createLeaveRequest(db, user, body) {
     endDate,
     days,
     leaveYear,
-    excludedDates: breakdown.excludedDates,
+    excludedDates: usesCalendarDays ? [] : breakdown.excludedDates,
     reason,
     medicalCertificate: null,
     entitlementId: linkedEntitlement?.id || null,
-    countingMethod: COUNTING_METHODS.SCHEDULED,
+    countingMethod: usesCalendarDays ? COUNTING_METHODS.CALENDAR : COUNTING_METHODS.SCHEDULED,
     workScheduleSnapshot,
     supportingDocument: null,
     status: "pending",
