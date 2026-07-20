@@ -24,6 +24,19 @@ The V1 tables are:
 - `cls_audit_events`
 - `cls_sessions`
 
+The leave-entitlement upgrade is stored separately in `supabase/v2-leave-entitlements.sql`. It is additive and leaves every enforcement setting disabled. Existing databases must apply V1 first, then V2. Do not apply V2 directly to production until it has passed the staging sequence below.
+
+V2 adds:
+
+- `cls_leave_entitlements`
+- `cls_leave_entitlement_adjustments`
+- `cls_leave_policy_settings`
+- Work-schedule and medical override columns on `cls_users`
+- Entitlement, counting, schedule-snapshot, and supporting-document columns on `cls_leave_requests`
+- An atomic database trigger that prevents concurrent requests from exceeding an enabled cap
+
+The new tables use RLS, explicitly revoke browser roles, and grant only `service_role`. Explicit grants are required for reliable Data API access on current Supabase projects.
+
 The app expects these Vercel environment variables:
 
 - `SUPABASE_URL`
@@ -98,3 +111,141 @@ Local emails are written to the outbox. Production sends these events through Re
 - Run Supabase security advisors after the migration is applied.
 - Configure and verify the production Resend sender domain.
 - Set a strong `INITIAL_ADMIN_PASSWORD` before first production login.
+
+## Leave Entitlement Rollout
+
+Run this sequence on a disposable Supabase branch or staging project first. Never print, paste into browser code, or commit the service-role key.
+
+1. Back up `cls_users`, `cls_leave_requests`, and `cls_leave_adjustments` from the Supabase dashboard.
+2. Record baseline counts:
+
+```sql
+select 'cls_users' as table_name, count(*) as row_count from public.cls_users
+union all
+select 'cls_leave_requests', count(*) from public.cls_leave_requests
+union all
+select 'cls_leave_adjustments', count(*) from public.cls_leave_adjustments;
+```
+
+3. Run `supabase/v2-leave-entitlements.sql` in the staging SQL Editor.
+4. Confirm the new columns and tables:
+
+```sql
+select table_name
+from information_schema.tables
+where table_schema = 'public'
+  and table_name in (
+    'cls_leave_entitlements',
+    'cls_leave_entitlement_adjustments',
+    'cls_leave_policy_settings'
+  )
+order by table_name;
+
+select table_name, column_name
+from information_schema.columns
+where table_schema = 'public'
+  and (
+    (table_name = 'cls_users' and column_name in ('work_schedule', 'medical_leave_entitlement_override'))
+    or
+    (table_name = 'cls_leave_requests' and column_name in (
+      'entitlement_id', 'counting_method', 'work_schedule_snapshot', 'supporting_document'
+    ))
+  )
+order by table_name, column_name;
+```
+
+5. Confirm RLS and `service_role` grants:
+
+```sql
+select c.relname as table_name, c.relrowsecurity as rls_enabled
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname in (
+    'cls_leave_entitlements',
+    'cls_leave_entitlement_adjustments',
+    'cls_leave_policy_settings'
+  )
+order by c.relname;
+
+select table_name, grantee, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public'
+  and table_name in (
+    'cls_leave_entitlements',
+    'cls_leave_entitlement_adjustments',
+    'cls_leave_policy_settings'
+  )
+order by table_name, grantee, privilege_type;
+```
+
+Expected: RLS is `true`; `service_role` has `SELECT`, `INSERT`, `UPDATE`, and `DELETE`; `anon` and `authenticated` have no table grants.
+
+6. Deploy the application while all entitlement enforcement settings remain disabled.
+7. In Admin > Employees > More > Manage Entitlements, review every employee's schedule, service start date, medical pools, annual grants, event grants, and remaining balances.
+8. Enable one policy at a time. Every update below contains a `where` clause:
+
+```sql
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Medical Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Hospitalization Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Compassionate Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Childcare Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Paternity Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'Maternity Leave';
+
+update public.cls_leave_policy_settings
+set enforcement_enabled = true, updated_at = now()
+where leave_type = 'National Service Leave';
+```
+
+9. After each update, submit and approve one staging request for that type. Confirm pending usage reserves capacity, approval does not change the displayed entitlement, cancellation releases capacity, and a request beyond the cap is rejected.
+10. Before production, rerun the baseline row-count query and verify that V2 did not delete or replace any V1 rows.
+
+### Behavior Rollback
+
+Roll back behavior by disabling only the affected policy. Do not drop V2 columns, tables, or the trigger during an incident.
+
+```sql
+update public.cls_leave_policy_settings
+set enforcement_enabled = false, updated_at = now()
+where leave_type = 'Medical Leave';
+```
+
+Use the same statement with one of these exact `leave_type` values: `Hospitalization Leave`, `Compassionate Leave`, `Childcare Leave`, `Paternity Leave`, `Maternity Leave`, or `National Service Leave`. Confirm the affected row before and after every update:
+
+```sql
+select leave_type, enforcement_enabled, updated_at
+from public.cls_leave_policy_settings
+where leave_type = 'Medical Leave';
+```
+
+### Staging Acceptance
+
+- Existing Annual, Medical Claims, Urgent, and Unpaid behavior is unchanged.
+- Existing medical leave balances survive the migration.
+- Service proration returns 0/0, 5/15, 8/30, 11/45, and 14/60 at the tested service boundaries.
+- Outpatient Medical and Hospitalization share the 60-day combined pool.
+- Compassionate grants 3 days per calendar year.
+- Eligible Childcare grants 6 days per calendar year and does not expose child birth dates outside Admin.
+- Paternity snapshots four work weeks and expires after 12 months.
+- Maternity requires one continuous 112-calendar-day request matching its grant.
+- National Service is uncapped and requires an Official Call-Up Notice.
+- Pending requests reserve balances and concurrent writes cannot exceed an enabled cap.
+- Overrides, remaining-balance adjustments, and audit events remain distinct.

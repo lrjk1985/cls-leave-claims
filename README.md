@@ -28,6 +28,11 @@ Seeded local accounts:
 - Saturdays, Sundays, and Singapore public holidays are excluded from leave deduction
 - Singapore public holidays sync from MOM's consolidated data.gov.sg dataset with a local cache
 - Leave applications with local email notifications to the assigned Direct Report / approver
+- Separately tracked Hospitalization, Compassionate, Paternity, Maternity, Childcare, and National Service leave
+- Configurable per-employee working schedules and entitlement grants
+- Combined outpatient and hospitalization medical pool with service-based proration
+- Employee request estimates and approver entitlement context
+- Admin entitlement adjustments with required reasons and audit history
 - Direct Report approval queue
 - Approved / not approved decision emails to employees
 - Medical and general claim submission with receipt uploads
@@ -36,7 +41,7 @@ Seeded local accounts:
 - Medical claim balance shown after login, with admin-set medical claim limits
 - General claims have no claim limit
 - Admin employee management, role assignment, direct report assignment, initial annual leave days, and medical claim limit setup
-- Supabase V1 rollout migration in `supabase/v1-rollout.sql` with dedicated production tables
+- Supabase V1 rollout migration plus the additive, disabled-by-default V2 entitlement upgrade
 - Vercel serverless adapter and daily maintenance cron in `vercel.json`
 - Resend-ready production email delivery with `.ics` leave calendar attachments
 - Vercel and Supabase rollout notes in `docs/PRODUCTION_ROLLOUT.md`
@@ -44,8 +49,10 @@ Seeded local accounts:
 ## Tests
 
 ```bash
-node --test
+npm test
 ```
+
+The live Supabase concurrency test also requires `SUPABASE_TEST_URL` and `SUPABASE_TEST_SERVICE_ROLE_KEY`. Without them, that single staging-only test is skipped.
 
 ## Local Data
 
