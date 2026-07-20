@@ -1210,6 +1210,87 @@ function claimCategoryAndType(body) {
   throw new Error("Category must be Medical or Others.");
 }
 
+function ensureAnnualSpecialLeaveEntitlements(db, asOfDate = new Date()) {
+  const year = currentLeaveYear(asOfDate);
+  const createdAt = nowIso();
+  const created = [];
+  if (!Array.isArray(db.leaveEntitlements)) db.leaveEntitlements = [];
+
+  function annualGrant(employeeId, leaveType) {
+    return db.leaveEntitlements.find(
+      (entitlement) =>
+        entitlement.employeeId === employeeId &&
+        entitlement.leaveType === leaveType &&
+        entitlement.periodKind === "annual" &&
+        Number(entitlement.periodYear) === year
+    );
+  }
+
+  function createAnnualGrant(employee, fields) {
+    const entitlement = {
+      id: `entitlement_${employee.id}_${fields.leaveType.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_${year}`,
+      employeeId: employee.id,
+      leaveType: fields.leaveType,
+      periodKind: "annual",
+      periodYear: year,
+      eventDate: null,
+      validFrom: `${year}-01-01`,
+      validUntil: `${year}-12-31`,
+      baseDays: fields.baseDays,
+      overrideDays: null,
+      eligibilityVerified: fields.eligibilityVerified,
+      eligibilityVerifiedBy: fields.eligibilityVerifiedBy || null,
+      eligibilityVerifiedAt: fields.eligibilityVerifiedAt || createdAt,
+      workScheduleSnapshot: normalizeWorkSchedule(employee.workSchedule),
+      childBirthDate: fields.childBirthDate || null,
+      active: true,
+      createdBy: null,
+      createdAt,
+      updatedAt: createdAt
+    };
+    db.leaveEntitlements.unshift(entitlement);
+    created.push(entitlement);
+  }
+
+  for (const employee of db.users) {
+    if (employee.active === false) continue;
+
+    if (!annualGrant(employee.id, LEAVE_TYPES.COMPASSIONATE)) {
+      createAnnualGrant(employee, {
+        leaveType: LEAVE_TYPES.COMPASSIONATE,
+        baseDays: 3,
+        eligibilityVerified: true
+      });
+    }
+
+    if (annualGrant(employee.id, LEAVE_TYPES.CHILDCARE)) continue;
+    const previousChildcare = db.leaveEntitlements
+      .filter(
+        (entitlement) =>
+          entitlement.employeeId === employee.id &&
+          entitlement.leaveType === LEAVE_TYPES.CHILDCARE &&
+          entitlement.periodKind === "annual" &&
+          Number(entitlement.periodYear) < year &&
+          entitlement.active !== false &&
+          entitlement.eligibilityVerified &&
+          entitlement.childBirthDate
+      )
+      .sort((left, right) => Number(right.periodYear) - Number(left.periodYear))[0];
+    if (previousChildcare) {
+      createAnnualGrant(employee, {
+        leaveType: LEAVE_TYPES.CHILDCARE,
+        baseDays: 6,
+        eligibilityVerified: true,
+        eligibilityVerifiedBy: previousChildcare.eligibilityVerifiedBy,
+        eligibilityVerifiedAt: previousChildcare.eligibilityVerifiedAt,
+        childBirthDate: previousChildcare.childBirthDate
+      });
+    }
+  }
+
+  return { changed: created.length > 0, created, year };
+}
+
 function applyLeaveYearRollover(db, asOfDate = new Date()) {
   const targetYear = currentLeaveYear(asOfDate);
   const processed = [];
@@ -1243,10 +1324,12 @@ function applyLeaveYearRollover(db, asOfDate = new Date()) {
     }
   }
 
+  const specialLeaveEntitlements = ensureAnnualSpecialLeaveEntitlements(db, asOfDate);
   return {
-    changed: processed.length > 0,
+    changed: processed.length > 0 || specialLeaveEntitlements.changed,
     processed,
-    year: targetYear
+    year: targetYear,
+    specialLeaveEntitlements
   };
 }
 
@@ -2511,7 +2594,7 @@ function addEmployeeUpdateAudit(db, actor, before, employee) {
 function addMaintenanceAuditEvents(db, actor, result) {
   let added = 0;
 
-  if (result.rollover?.changed) {
+  if (result.rollover?.processed?.length) {
     const count = result.rollover.processed?.length || 0;
     addAuditEvent(db, actor, {
       action: "maintenance.leave_rollover",
@@ -2521,6 +2604,25 @@ function addMaintenanceAuditEvents(db, actor, result) {
         year: result.rollover.year,
         processedCount: count,
         processed: result.rollover.processed || []
+      }
+    });
+    added += 1;
+  }
+
+  if (result.rollover?.specialLeaveEntitlements?.changed) {
+    const created = result.rollover.specialLeaveEntitlements.created || [];
+    addAuditEvent(db, actor, {
+      action: "maintenance.special_leave_entitlements_created",
+      relatedType: "maintenance",
+      summary: `Created ${created.length} annual special leave entitlement${created.length === 1 ? "" : "s"}.`,
+      metadata: {
+        year: result.rollover.specialLeaveEntitlements.year,
+        created: created.map((entitlement) => ({
+          id: entitlement.id,
+          employeeId: entitlement.employeeId,
+          leaveType: entitlement.leaveType,
+          baseDays: entitlement.baseDays
+        }))
       }
     });
     added += 1;
@@ -3538,13 +3640,31 @@ async function createLeaveRequest(db, user, body) {
   assertIsoDate(startDate, "Start date");
   assertIsoDate(endDate, "End date");
   leaveDayBreakdown(startDate, endDate);
+  const leaveYear = Number(startDate.slice(0, 4));
+  const annualEntitlementType = type === LEAVE_TYPES.COMPASSIONATE || type === LEAVE_TYPES.CHILDCARE;
+  let linkedEntitlement = null;
+  if (annualEntitlementType && policyEnforcementEnabled(db, type)) {
+    linkedEntitlement = findActiveEntitlement(db.leaveEntitlements || [], {
+      employeeId: user.id,
+      leaveType: type,
+      date: startDate,
+      year: leaveYear,
+      eligibilityRequired: type === LEAVE_TYPES.CHILDCARE
+    });
+    if (!linkedEntitlement || (linkedEntitlement.validUntil && endDate > linkedEntitlement.validUntil)) {
+      throw new Error(`An active ${type} entitlement is required for these dates.`);
+    }
+  }
 
   const publicHolidays = await getSingaporePublicHolidaysForRange(startDate, endDate);
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
-  const days = isMedicalLeave || isHospitalizationLeave
-    ? scheduledDaysBetween(startDate, endDate, user.workSchedule, publicHolidays)
+  const usesScheduleSnapshot = isMedicalLeave || isHospitalizationLeave || Boolean(linkedEntitlement);
+  const workScheduleSnapshot = usesScheduleSnapshot
+    ? normalizeWorkSchedule(linkedEntitlement?.workScheduleSnapshot || user.workSchedule)
+    : null;
+  const days = usesScheduleSnapshot
+    ? scheduledDaysBetween(startDate, endDate, workScheduleSnapshot, publicHolidays)
     : breakdown.days;
-  const leaveYear = Number(startDate.slice(0, 4));
 
   if (days <= 0) {
     throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
@@ -3569,6 +3689,15 @@ async function createLeaveRequest(db, user, body) {
     if (days > summary.combined.unreserved) {
       throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
     }
+  } else if (linkedEntitlement) {
+    const summary = entitlementSummary(
+      linkedEntitlement,
+      db.leaveRequests,
+      db.leaveEntitlementAdjustments || []
+    );
+    if (days > summary.unreserved) {
+      throw new Error(`This request needs ${days} days, but the ${type} balance has only ${summary.unreserved} day${summary.unreserved === 1 ? "" : "s"} remaining.`);
+    }
   } else if (!isSpecialLeave) {
     const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
     if (!user.unlimitedAnnualLeave && days > summary.available) {
@@ -3592,13 +3721,9 @@ async function createLeaveRequest(db, user, body) {
     excludedDates: breakdown.excludedDates,
     reason,
     medicalCertificate: null,
-    entitlementId: null,
-    countingMethod: isMedicalLeave || isHospitalizationLeave
-      ? COUNTING_METHODS.SCHEDULED
-      : COUNTING_METHODS.SCHEDULED,
-    workScheduleSnapshot: isMedicalLeave || isHospitalizationLeave
-      ? normalizeWorkSchedule(user.workSchedule)
-      : null,
+    entitlementId: linkedEntitlement?.id || null,
+    countingMethod: COUNTING_METHODS.SCHEDULED,
+    workScheduleSnapshot,
     supportingDocument: null,
     status: "pending",
     decisionNote: "",
@@ -4477,6 +4602,7 @@ module.exports = {
     createLeaveRequest,
     dashboard,
     deliverQueuedEmails,
+    ensureAnnualSpecialLeaveEntitlements,
     limitSessionsForUser,
     medicalClaimsExport,
     normalizeDb,

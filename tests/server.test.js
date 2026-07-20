@@ -1224,6 +1224,123 @@ test("medical override applies and cancelled requests release combined capacity"
   assert.equal(request.status, "pending");
 });
 
+test("ensureAnnualSpecialLeaveEntitlements creates idempotent Compassionate and eligible Childcare grants", () => {
+  const active = {
+    id: "usr_active",
+    name: "Active",
+    email: "active@cls.local",
+    role: "employee",
+    active: true,
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const inactive = {
+    id: "usr_inactive",
+    name: "Inactive",
+    email: "inactive@cls.local",
+    role: "employee",
+    active: false,
+    serviceStartDate: "2025-01-01"
+  };
+  const previousChildcare = {
+    id: "ent_childcare_2025",
+    employeeId: active.id,
+    leaveType: "Childcare Leave",
+    periodKind: "annual",
+    periodYear: 2025,
+    validFrom: "2025-01-01",
+    validUntil: "2025-12-31",
+    baseDays: 6,
+    overrideDays: null,
+    eligibilityVerified: true,
+    eligibilityVerifiedBy: "usr_admin",
+    eligibilityVerifiedAt: "2025-01-01T00:00:00.000Z",
+    workScheduleSnapshot: [1, 2, 3, 4, 5],
+    childBirthDate: "2022-04-10",
+    active: true,
+    createdAt: "2025-01-01T00:00:00.000Z",
+    updatedAt: "2025-01-01T00:00:00.000Z"
+  };
+  const db = __test.normalizeDb({
+    users: [active, inactive],
+    leaveEntitlements: [previousChildcare],
+    leaveRequests: [{
+      id: "leave_childcare_2025",
+      employeeId: active.id,
+      entitlementId: previousChildcare.id,
+      type: "Childcare Leave",
+      status: "approved",
+      days: 6,
+      leaveYear: 2025
+    }]
+  });
+
+  const first = __test.ensureAnnualSpecialLeaveEntitlements(db, new Date("2026-01-01T00:00:00Z"));
+  const second = __test.ensureAnnualSpecialLeaveEntitlements(db, new Date("2026-01-01T00:00:00Z"));
+
+  assert.equal(first.created.length, 2);
+  assert.equal(second.created.length, 0);
+  assert.equal(db.leaveEntitlements.filter((grant) => grant.periodYear === 2026).length, 2);
+  assert.equal(db.leaveEntitlements.some(
+    (grant) => grant.employeeId === inactive.id && grant.periodYear === 2026
+  ), false);
+  const compassionate = db.leaveEntitlements.find(
+    (grant) => grant.leaveType === "Compassionate Leave" && grant.periodYear === 2026
+  );
+  const childcare = db.leaveEntitlements.find(
+    (grant) => grant.leaveType === "Childcare Leave" && grant.periodYear === 2026
+  );
+  assert.equal(compassionate.baseDays, 3);
+  assert.equal(childcare.baseDays, 6);
+  assert.equal(childcare.childBirthDate, "2022-04-10");
+  assert.equal("childName" in childcare, false);
+  assert.equal("citizenship" in childcare, false);
+  assert.equal(childcare.summary, undefined);
+  assert.equal(db.leaveRequests.filter((request) => request.entitlementId === childcare.id).length, 0);
+});
+
+test("enabled Compassionate enforcement requires an active grant and reserves pending days", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    active: true,
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({
+    users: [employee],
+    leavePolicySettings: [{
+      leaveType: "Compassionate Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }],
+    leaveRequests: []
+  });
+  __test.ensureAnnualSpecialLeaveEntitlements(db, new Date("2026-01-01T00:00:00Z"));
+  const grant = db.leaveEntitlements.find(
+    (entitlement) => entitlement.leaveType === "Compassionate Leave"
+  );
+  db.leaveRequests.push({
+    id: "leave_pending",
+    employeeId: employee.id,
+    entitlementId: grant.id,
+    type: "Compassionate Leave",
+    status: "pending",
+    days: 3,
+    leaveYear: 2026
+  });
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "Compassionate Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-21",
+    reason: "Bereavement"
+  }), /Compassionate Leave balance has only 0 days remaining/);
+});
+
 test("createClaim routes claims to the separate claims approver", async () => {
   const employee = {
     id: "usr_employee",
