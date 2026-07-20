@@ -71,3 +71,25 @@ test("National Service Leave requests an official call-up notice", () => {
   assert.match(appSource, /supportingDocumentUpload/);
   assert.match(appSource, /uncapped_scheduled_days|National Service Leave/);
 });
+
+test("admin directory includes inline entitlement management", () => {
+  assert.match(appSource, /data-action="manage-entitlements"/);
+  assert.match(appSource, /aria-controls="employee-entitlements-/);
+  assert.match(appSource, /name="workSchedule"/);
+  assert.match(appSource, /\[1, "Monday"\]/);
+  assert.match(appSource, /Outpatient Medical/);
+  assert.match(appSource, /Combined Medical \+ Hospitalization/);
+  assert.match(appSource, /Child Date of Birth/);
+  assert.match(appSource, /Paternity Leave/);
+  assert.match(appSource, /Maternity Leave/);
+  assert.match(appSource, /Adjustment Reason/);
+  ["Used", "Pending", "Remaining", "Valid", "Expiry"].forEach((label) => {
+    assert.match(appSource, new RegExp(label));
+  });
+});
+
+test("entitlement management is responsive and unframed", () => {
+  assert.match(cssSource, /\.entitlement-manager\s*\{/);
+  assert.match(cssSource, /\.entitlement-grid\s*\{[\s\S]*grid-template-columns/);
+  assert.match(cssSource, /@media \(max-width:\s*640px\) \{[\s\S]*\.entitlement-grid\s*\{[\s\S]*grid-template-columns:\s*1fr/);
+});

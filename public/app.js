@@ -50,6 +50,7 @@ const state = {
   leaveAdjustment: {
     employeeId: null
   },
+  entitlementEmployeeId: null,
   sidebarQuote: null
 };
 
@@ -568,6 +569,8 @@ function applyDashboardPatch(patch = {}) {
     "medicalLeaveSummary",
     "medicalClaimSummary",
     "generalClaimSummary",
+    "leaveEntitlementSummaries",
+    "leavePolicySettings",
     "receiptStorageSummary",
     "leaveAdjustments",
     "emails",
@@ -975,6 +978,9 @@ function formSubmittingLabel(formType) {
     claim: "Submitting Claim...",
     employee: "Creating Employee...",
     "leave-adjustment": "Applying Adjustment...",
+    "entitlement-adjustment": "Applying Adjustment...",
+    "leave-entitlement": "Creating Grant...",
+    "work-schedule": "Saving Schedule...",
     password: "Changing Password..."
   }[formType] || "Submitting...";
 }
@@ -2379,6 +2385,110 @@ function employeeMedicalLeaveRemaining(employee) {
   return Number(employee.medicalLeaveRemaining ?? employeeMedicalLeaveEntitlement(employee));
 }
 
+const WORK_WEEKDAYS = [
+  [1, "Monday"],
+  [2, "Tuesday"],
+  [3, "Wednesday"],
+  [4, "Thursday"],
+  [5, "Friday"],
+  [6, "Saturday"],
+  [7, "Sunday"]
+];
+
+function employeeEntitlementBundle(employeeId) {
+  return state.dashboard.leaveEntitlementSummaries?.find(
+    (entry) => entry.employeeId === employeeId
+  ) || { entitlements: [], medicalHospitalization: null };
+}
+
+function renderManagedEntitlement(entitlement) {
+  const summary = entitlement.summary || {};
+  const expiryLabel = entitlement.validUntil ? dateText(entitlement.validUntil) : "No expiry";
+  return `
+    <div class="entitlement-row">
+      <div class="entitlement-row-main">
+        <strong>${escapeHtml(entitlement.leaveType)}</strong>
+        <span class="muted">Valid ${dateText(entitlement.validFrom)} to ${expiryLabel}</span>
+      </div>
+      <dl class="entitlement-facts">
+        <div><dt>Entitlement</dt><dd>${displayNumber(summary.entitlement ?? entitlement.baseDays)}</dd></div>
+        <div><dt>Used</dt><dd>${displayNumber(summary.approved ?? 0)}</dd></div>
+        <div><dt>Pending</dt><dd>${displayNumber(summary.pending ?? 0)}</dd></div>
+        <div><dt>Remaining</dt><dd>${displayNumber(summary.unreserved ?? entitlement.baseDays)}</dd></div>
+        <div><dt>Expiry</dt><dd>${expiryLabel}</dd></div>
+      </dl>
+      <form class="entitlement-adjustment-form" data-form="entitlement-adjustment" data-entitlement-id="${entitlement.id}">
+        <div class="field">
+          <label>Set Remaining</label>
+          <input name="desiredRemaining" type="number" min="0" step="0.5" value="${displayNumber(summary.available ?? entitlement.baseDays)}" required>
+        </div>
+        <div class="field">
+          <label>Adjustment Reason</label>
+          <input name="reason" required>
+        </div>
+        <button class="button small" type="submit">Apply</button>
+      </form>
+    </div>
+  `;
+}
+
+function renderEntitlementManager(employee) {
+  const bundle = employeeEntitlementBundle(employee.id);
+  const medical = bundle.medicalHospitalization;
+  const selectedDays = new Set(employee.workSchedule || [1, 2, 3, 4, 5]);
+  return `
+    <section class="entitlement-manager" id="employee-entitlements-${employee.id}" aria-label="Manage entitlements for ${escapeHtml(employee.name)}">
+      <div class="entitlement-manager-header">
+        <div>
+          <h3>Leave Entitlements</h3>
+          <p class="muted">Grant values remain separate from approved and pending usage.</p>
+        </div>
+        <button class="button small" type="button" data-action="manage-entitlements" data-id="${employee.id}" aria-expanded="true" aria-controls="employee-entitlements-${employee.id}">Close</button>
+      </div>
+      <div class="entitlement-medical-summary">
+        <div><span>Outpatient Medical</span><strong>${displayNumber(medical?.outpatient?.unreserved ?? 0)} remaining</strong></div>
+        <div><span>Combined Medical + Hospitalization</span><strong>${displayNumber(medical?.combined?.unreserved ?? 0)} remaining</strong></div>
+      </div>
+      <form class="entitlement-schedule-form" data-form="work-schedule" data-employee-id="${employee.id}">
+        <fieldset>
+          <legend>Scheduled Working Days</legend>
+          <div class="weekday-options">
+            ${WORK_WEEKDAYS.map(([day, label]) => `
+              <label><input name="workSchedule" type="checkbox" value="${day}" ${selectedDays.has(day) ? "checked" : ""}> ${label}</label>
+            `).join("")}
+          </div>
+        </fieldset>
+        <button class="button small" type="submit">Save Schedule</button>
+      </form>
+      <div class="entitlement-list">
+        ${bundle.entitlements.length
+          ? bundle.entitlements.map(renderManagedEntitlement).join("")
+          : `<div class="empty">No entitlement grants have been created for this employee.</div>`}
+      </div>
+      <form class="entitlement-create-form entitlement-grid" data-form="leave-entitlement" data-employee-id="${employee.id}">
+        <div class="field">
+          <label>Leave Type</label>
+          <select name="leaveType" required>
+            <option>Hospitalization Leave</option>
+            <option>Compassionate Leave</option>
+            <option>Paternity Leave</option>
+            <option>Maternity Leave</option>
+            <option>Childcare Leave</option>
+          </select>
+        </div>
+        <div class="field"><label>Period Year</label><input name="periodYear" type="number" value="${currentYearText()}"></div>
+        <div class="field"><label>Entitlement Days</label><input name="baseDays" type="number" min="0" step="0.5"></div>
+        <div class="field"><label>Event Date</label><input name="eventDate" type="date"></div>
+        <div class="field"><label>Valid From</label><input name="validFrom" type="date"></div>
+        <div class="field"><label>Valid Until / Expiry</label><input name="validUntil" type="date"></div>
+        <div class="field"><label>Child Date of Birth</label><input name="childBirthDate" type="date"></div>
+        <label class="field checkbox-field"><span>Eligibility Verified</span><input name="eligibilityVerified" type="checkbox"></label>
+        <div class="field full actions"><button class="button primary small" type="submit">Create Grant</button></div>
+      </form>
+    </section>
+  `;
+}
+
 function renderEmployees() {
   const managerChoices = employeeManagerChoices();
   renderShell(`
@@ -2556,12 +2666,14 @@ function renderEmployees() {
                   <details class="action-menu">
                     <summary class="button small">More</summary>
                     <div class="action-menu-list">
+                      <button class="button small" type="button" data-action="manage-entitlements" data-id="${employee.id}" aria-expanded="${state.entitlementEmployeeId === employee.id}" aria-controls="employee-entitlements-${employee.id}">Manage Entitlements</button>
                       <button class="button small" type="button" data-action="open-leave-adjustment" data-id="${employee.id}">Adjust Leave</button>
                       <button class="button small" type="button" data-action="open-password-reset" data-id="${employee.id}">Reset Password</button>
                     </div>
                   </details>
                 </div>
               </div>
+              ${state.entitlementEmployeeId === employee.id ? renderEntitlementManager(employee) : ""}
             </div>
           `).join("")}
           </div>
@@ -2864,6 +2976,40 @@ document.addEventListener("submit", async (event) => {
       updateDashboard(data);
       showToast("Leave adjustment applied.");
     }
+    if (formType === "work-schedule") {
+      const workSchedule = [...form.querySelectorAll("input[name='workSchedule']:checked")]
+        .map((input) => Number(input.value));
+      const data = await api(`/api/employees/${form.dataset.employeeId}/work-schedule`, {
+        method: "PATCH",
+        body: JSON.stringify({ workSchedule })
+      });
+      updateDashboard(data);
+      showToast("Work schedule updated.");
+    }
+    if (formType === "leave-entitlement") {
+      const entitlementBody = { ...body, employeeId: form.dataset.employeeId };
+      entitlementBody.eligibilityVerified = form.querySelector("input[name='eligibilityVerified']").checked;
+      Object.keys(entitlementBody).forEach((key) => {
+        if (entitlementBody[key] === "") delete entitlementBody[key];
+      });
+      const data = await api("/api/leave-entitlements", {
+        method: "POST",
+        body: JSON.stringify(entitlementBody)
+      });
+      updateDashboard(data);
+      showToast("Entitlement grant created.");
+    }
+    if (formType === "entitlement-adjustment") {
+      if (!String(body.reason || "").trim()) {
+        throw new Error("Adjustment Reason is required.");
+      }
+      const data = await api(`/api/leave-entitlements/${form.dataset.entitlementId}/adjustments`, {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      updateDashboard(data);
+      showToast("Entitlement remaining balance updated.");
+    }
     if (formType === "password") {
       const data = await api("/api/account/password", {
         method: "POST",
@@ -2955,6 +3101,18 @@ document.addEventListener("click", async (event) => {
         updateDashboard(data);
         showToast("Employee updated.");
       });
+      return;
+    }
+
+    if (action === "manage-entitlements") {
+      const opening = state.entitlementEmployeeId !== button.dataset.id;
+      state.entitlementEmployeeId = opening ? button.dataset.id : null;
+      render();
+      if (opening) {
+        requestAnimationFrame(() => {
+          document.querySelector(`#employee-entitlements-${CSS.escape(button.dataset.id)} input, #employee-entitlements-${CSS.escape(button.dataset.id)} select`)?.focus();
+        });
+      }
       return;
     }
 
