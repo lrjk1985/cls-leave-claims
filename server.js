@@ -29,6 +29,7 @@ const {
   requiresMedicalCertificate,
   workingDaysBetween
 } = require("./src/domain");
+const { normalizeWorkSchedule } = require("./src/leaveEntitlements");
 const {
   getSingaporePublicHolidaysForRange,
   syncSingaporePublicHolidays
@@ -458,6 +459,10 @@ function userToRow(user) {
     medical_leave_entitlement: Number(user.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
     medical_leave_balance_adjustment: Number(user.medicalLeaveBalanceAdjustment || 0),
     medical_leave_balance_adjustment_year: Number(user.medicalLeaveBalanceAdjustmentYear || user.leavePolicyYear || currentLeaveYear()),
+    work_schedule: normalizeWorkSchedule(user.workSchedule),
+    medical_leave_entitlement_override: user.medicalLeaveEntitlementOverride === null || user.medicalLeaveEntitlementOverride === undefined
+      ? null
+      : Number(user.medicalLeaveEntitlementOverride),
     active: Boolean(user.active),
     password_salt: user.passwordSalt,
     password_hash: user.passwordHash,
@@ -490,6 +495,10 @@ function userFromRow(row) {
     medicalLeaveEntitlement: Number(row.medical_leave_entitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS),
     medicalLeaveBalanceAdjustment: Number(row.medical_leave_balance_adjustment || 0),
     medicalLeaveBalanceAdjustmentYear: Number(row.medical_leave_balance_adjustment_year || row.leave_policy_year || currentLeaveYear()),
+    workSchedule: normalizeWorkSchedule(row.work_schedule),
+    medicalLeaveEntitlementOverride: row.medical_leave_entitlement_override === null || row.medical_leave_entitlement_override === undefined
+      ? null
+      : Number(row.medical_leave_entitlement_override),
     active: Boolean(row.active),
     passwordSalt: row.password_salt,
     passwordHash: row.password_hash,
@@ -511,6 +520,10 @@ function leaveRequestToRow(request) {
     excluded_dates: Array.isArray(request.excludedDates) ? request.excludedDates : [],
     reason: request.reason || "",
     medical_certificate: request.medicalCertificate || null,
+    entitlement_id: nullish(request.entitlementId),
+    counting_method: request.countingMethod || "scheduled_working_days",
+    work_schedule_snapshot: request.workScheduleSnapshot || null,
+    supporting_document: request.supportingDocument || null,
     status: request.status,
     decision_note: request.decisionNote || "",
     created_at: request.createdAt,
@@ -536,6 +549,10 @@ function leaveRequestFromRow(row) {
     excludedDates: Array.isArray(row.excluded_dates) ? row.excluded_dates : [],
     reason: row.reason || "",
     medicalCertificate: row.medical_certificate || null,
+    entitlementId: row.entitlement_id,
+    countingMethod: row.counting_method || "scheduled_working_days",
+    workScheduleSnapshot: row.work_schedule_snapshot,
+    supportingDocument: row.supporting_document,
     status: row.status,
     decisionNote: row.decision_note || "",
     createdAt: row.created_at,
@@ -569,6 +586,96 @@ function leaveAdjustmentFromRow(row) {
     days: Number(row.days || 0),
     reason: row.reason || "",
     createdAt: row.created_at
+  };
+}
+
+function leaveEntitlementToRow(entitlement) {
+  return {
+    id: entitlement.id,
+    employee_id: entitlement.employeeId,
+    leave_type: entitlement.leaveType,
+    period_kind: entitlement.periodKind,
+    period_year: nullish(entitlement.periodYear),
+    event_date: nullish(entitlement.eventDate),
+    valid_from: entitlement.validFrom,
+    valid_until: nullish(entitlement.validUntil),
+    base_days: Number(entitlement.baseDays || 0),
+    override_days: entitlement.overrideDays === null || entitlement.overrideDays === undefined
+      ? null
+      : Number(entitlement.overrideDays),
+    eligibility_verified: Boolean(entitlement.eligibilityVerified),
+    eligibility_verified_by: nullish(entitlement.eligibilityVerifiedBy),
+    eligibility_verified_at: nullish(entitlement.eligibilityVerifiedAt),
+    work_schedule_snapshot: entitlement.workScheduleSnapshot || null,
+    child_birth_date: nullish(entitlement.childBirthDate),
+    active: Boolean(entitlement.active),
+    created_by: nullish(entitlement.createdBy),
+    created_at: entitlement.createdAt,
+    updated_at: entitlement.updatedAt
+  };
+}
+
+function leaveEntitlementFromRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    leaveType: row.leave_type,
+    periodKind: row.period_kind,
+    periodYear: row.period_year === null ? null : Number(row.period_year),
+    eventDate: row.event_date,
+    validFrom: row.valid_from,
+    validUntil: row.valid_until,
+    baseDays: Number(row.base_days || 0),
+    overrideDays: row.override_days === null ? null : Number(row.override_days),
+    eligibilityVerified: Boolean(row.eligibility_verified),
+    eligibilityVerifiedBy: row.eligibility_verified_by,
+    eligibilityVerifiedAt: row.eligibility_verified_at,
+    workScheduleSnapshot: row.work_schedule_snapshot,
+    childBirthDate: row.child_birth_date,
+    active: Boolean(row.active),
+    createdBy: row.created_by,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function leaveEntitlementAdjustmentToRow(adjustment) {
+  return {
+    id: adjustment.id,
+    entitlement_id: adjustment.entitlementId,
+    actor_id: nullish(adjustment.actorId),
+    days: Number(adjustment.days),
+    reason: adjustment.reason,
+    created_at: adjustment.createdAt
+  };
+}
+
+function leaveEntitlementAdjustmentFromRow(row) {
+  return {
+    id: row.id,
+    entitlementId: row.entitlement_id,
+    actorId: row.actor_id,
+    days: Number(row.days),
+    reason: row.reason,
+    createdAt: row.created_at
+  };
+}
+
+function leavePolicySettingToRow(setting) {
+  return {
+    leave_type: setting.leaveType,
+    enforcement_enabled: Boolean(setting.enforcementEnabled),
+    updated_at: setting.updatedAt,
+    updated_by: nullish(setting.updatedBy)
+  };
+}
+
+function leavePolicySettingFromRow(row) {
+  return {
+    leaveType: row.leave_type,
+    enforcementEnabled: Boolean(row.enforcement_enabled),
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by
   };
 }
 
@@ -708,6 +815,9 @@ function sessionFromRow(row) {
 
 const SUPABASE_TABLES = [
   { field: "users", table: "cls_users", key: "id", order: "created_at.asc", toRow: userToRow, fromRow: userFromRow },
+  { field: "leaveEntitlements", table: "cls_leave_entitlements", key: "id", order: "created_at.desc", toRow: leaveEntitlementToRow, fromRow: leaveEntitlementFromRow },
+  { field: "leaveEntitlementAdjustments", table: "cls_leave_entitlement_adjustments", key: "id", order: "created_at.desc", toRow: leaveEntitlementAdjustmentToRow, fromRow: leaveEntitlementAdjustmentFromRow },
+  { field: "leavePolicySettings", table: "cls_leave_policy_settings", key: "leave_type", order: "leave_type.asc", toRow: leavePolicySettingToRow, fromRow: leavePolicySettingFromRow },
   { field: "leaveRequests", table: "cls_leave_requests", key: "id", order: "created_at.desc", toRow: leaveRequestToRow, fromRow: leaveRequestFromRow },
   { field: "leaveAdjustments", table: "cls_leave_adjustments", key: "id", order: "created_at.desc", toRow: leaveAdjustmentToRow, fromRow: leaveAdjustmentFromRow },
   { field: "medicalClaims", table: "cls_claims", key: "id", order: "created_at.desc", toRow: claimToRow, fromRow: claimFromRow },
@@ -921,10 +1031,21 @@ function normalizeDb(db) {
       ? db.leaveRequests.map((request) => ({
           ...request,
           medicalCertificate: request.medicalCertificate || null,
-          excludedDates: Array.isArray(request.excludedDates) ? request.excludedDates : []
+          excludedDates: Array.isArray(request.excludedDates) ? request.excludedDates : [],
+          entitlementId: request.entitlementId || null,
+          countingMethod: request.countingMethod || "scheduled_working_days",
+          workScheduleSnapshot: request.workScheduleSnapshot
+            ? normalizeWorkSchedule(request.workScheduleSnapshot)
+            : null,
+          supportingDocument: request.supportingDocument || null
         }))
       : [],
     leaveAdjustments: Array.isArray(db.leaveAdjustments) ? db.leaveAdjustments.map(normalizeLeaveAdjustment) : [],
+    leaveEntitlements: Array.isArray(db.leaveEntitlements) ? db.leaveEntitlements : [],
+    leaveEntitlementAdjustments: Array.isArray(db.leaveEntitlementAdjustments)
+      ? db.leaveEntitlementAdjustments
+      : [],
+    leavePolicySettings: Array.isArray(db.leavePolicySettings) ? db.leavePolicySettings : [],
     medicalClaims: Array.isArray(db.medicalClaims) ? db.medicalClaims.map(normalizeClaim) : [],
     emails: Array.isArray(db.emails) ? db.emails : [],
     auditEvents: Array.isArray(db.auditEvents) ? db.auditEvents.map(normalizeAuditEvent) : [],
@@ -995,6 +1116,10 @@ function normalizeUser(user) {
       "Medical leave balance adjustment"
     ),
     medicalLeaveBalanceAdjustmentYear: Number(user.medicalLeaveBalanceAdjustmentYear || user.leavePolicyYear || thisYear),
+    workSchedule: normalizeWorkSchedule(user.workSchedule),
+    medicalLeaveEntitlementOverride: user.medicalLeaveEntitlementOverride === null || user.medicalLeaveEntitlementOverride === undefined
+      ? null
+      : normalizeLeaveDays(user.medicalLeaveEntitlementOverride, "Medical leave entitlement override"),
     claimApproverId: user.claimApproverId ?? user.claimManagerId ?? user.claimApprover ?? user.managerId ?? null
   };
   if (user.annualLeaveEntitlement === undefined || user.annualLeaveEntitlement === null) {
@@ -1181,6 +1306,9 @@ function seedProductionDb() {
     users: [admin],
     leaveRequests: [],
     leaveAdjustments: [],
+    leaveEntitlements: [],
+    leaveEntitlementAdjustments: [],
+    leavePolicySettings: [],
     medicalClaims: [],
     sessions: [],
     auditEvents: [],
@@ -1348,6 +1476,9 @@ function seedDb() {
     users,
     leaveRequests: [leaveRequest],
     leaveAdjustments: [],
+    leaveEntitlements: [],
+    leaveEntitlementAdjustments: [],
+    leavePolicySettings: [],
     medicalClaims: [medicalClaim],
     sessions: [],
     auditEvents: [],
@@ -3832,6 +3963,7 @@ module.exports = {
     deliverQueuedEmails,
     limitSessionsForUser,
     medicalClaimsExport,
+    normalizeDb,
     multipartBoundary,
     parseMultipartBuffer,
     parseReceipt,

@@ -3,6 +3,14 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { __test } = require("../server");
+
+test("normalizeDb adds entitlement collections and default work schedules", () => {
+  const db = __test.normalizeDb({ users: [{ id: "u1", serviceStartDate: "2026-01-01" }] });
+  assert.deepEqual(db.leaveEntitlements, []);
+  assert.deepEqual(db.leaveEntitlementAdjustments, []);
+  assert.deepEqual(db.leavePolicySettings, []);
+  assert.deepEqual(db.users[0].workSchedule, [1, 2, 3, 4, 5]);
+});
 const { medicalClaimSummary, medicalLeaveSummary } = require("../src/domain");
 
 test("parseMultipartBuffer keeps receipt uploads binary", () => {
@@ -1193,6 +1201,8 @@ test("Supabase table mappings round-trip core app records", () => {
       medicalLeaveEntitlement: 14,
       medicalLeaveBalanceAdjustment: -0.5,
       medicalLeaveBalanceAdjustmentYear: 2026,
+      workSchedule: [1, 2, 3, 4, 5],
+      medicalLeaveEntitlementOverride: 18,
       active: true,
       passwordSalt: "salt",
       passwordHash: "hash",
@@ -1211,6 +1221,10 @@ test("Supabase table mappings round-trip core app records", () => {
       excludedDates: [{ date: "2026-06-05", reason: "Public Holiday" }],
       reason: "Sick",
       medicalCertificate: { originalName: "mc.pdf", storedName: "medical-certificates/mc.pdf" },
+      entitlementId: "ent_medical_2026",
+      countingMethod: "scheduled_working_days",
+      workScheduleSnapshot: [1, 2, 3, 4, 5],
+      supportingDocument: { originalName: "mc.pdf", storedName: "medical-certificates/mc.pdf" },
       status: "pending",
       decisionNote: "",
       createdAt: "2026-06-04T00:00:00.000Z",
@@ -1229,6 +1243,41 @@ test("Supabase table mappings round-trip core app records", () => {
       days: 0.5,
       reason: "Correction",
       createdAt: "2026-06-04T00:00:00.000Z"
+    },
+    leaveEntitlements: {
+      id: "ent_medical_2026",
+      employeeId: "usr_employee",
+      leaveType: "Medical Leave",
+      periodKind: "annual",
+      periodYear: 2026,
+      eventDate: null,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+      baseDays: 14,
+      overrideDays: 18,
+      eligibilityVerified: true,
+      eligibilityVerifiedBy: "usr_admin",
+      eligibilityVerifiedAt: "2026-01-02T00:00:00.000Z",
+      workScheduleSnapshot: [1, 2, 3, 4, 5],
+      childBirthDate: null,
+      active: true,
+      createdBy: "usr_admin",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-02T00:00:00.000Z"
+    },
+    leaveEntitlementAdjustments: {
+      id: "ent_adjust_1",
+      entitlementId: "ent_medical_2026",
+      actorId: "usr_admin",
+      days: -1,
+      reason: "Correction",
+      createdAt: "2026-06-04T00:00:00.000Z"
+    },
+    leavePolicySettings: {
+      leaveType: "Medical Leave",
+      enforcementEnabled: false,
+      updatedAt: "2026-06-04T00:00:00.000Z",
+      updatedBy: "usr_admin"
     },
     medicalClaims: {
       id: "claim_1",
