@@ -2689,6 +2689,43 @@ function employeeEntitlementBundle(employeeId) {
   ) || { entitlements: [], medicalHospitalization: null };
 }
 
+const ENTITLEMENT_GRANT_GUIDANCE = {
+  "Hospitalization Leave": {
+    fields: "Period Year and Entitlement Days",
+    detail: "Only create this grant to override the normal combined medical and hospitalization limit. Enter the combined limit, normally 60 days, not the additional 46 days."
+  },
+  "Compassionate Leave": {
+    fields: "Period Year and Entitlement Days",
+    detail: "Use 3 entitlement days. Leave the validity dates blank to use the full calendar year."
+  },
+  "Paternity Leave": {
+    fields: "Event Date and Eligibility Verified",
+    detail: "The four-week entitlement is calculated from Scheduled Working Days. Leave Entitlement Days blank."
+  },
+  "Maternity Leave": {
+    fields: "Valid From, Valid Until, and Eligibility Verified",
+    detail: "Enter a continuous 16-week period of exactly 112 calendar days. Leave Entitlement Days blank because it is calculated automatically."
+  },
+  "Childcare Leave": {
+    fields: "Period Year, Entitlement Days, Child Date of Birth, and Eligibility Verified",
+    detail: "Use 6 entitlement days. Leave the validity dates blank to use the full calendar year."
+  }
+};
+
+function entitlementGrantGuidanceHtml(leaveType) {
+  const guidance = ENTITLEMENT_GRANT_GUIDANCE[leaveType] || ENTITLEMENT_GRANT_GUIDANCE["Hospitalization Leave"];
+  return `
+    <strong>Complete: ${escapeHtml(guidance.fields)}</strong>
+    <span>${escapeHtml(guidance.detail)}</span>
+  `;
+}
+
+function updateEntitlementGrantGuidance(form) {
+  const leaveType = form.querySelector("select[name='leaveType']")?.value;
+  const guidance = form.querySelector("[data-entitlement-guidance]");
+  if (guidance) guidance.innerHTML = entitlementGrantGuidanceHtml(leaveType);
+}
+
 function renderManagedEntitlement(entitlement) {
   const summary = entitlement.summary || {};
   const expiryLabel = entitlement.validUntil ? dateText(entitlement.validUntil) : "No expiry";
@@ -2709,6 +2746,7 @@ function renderManagedEntitlement(entitlement) {
         <div class="field">
           <label>Set Remaining</label>
           <input name="desiredRemaining" type="number" min="0" step="0.5" value="${displayNumber(summary.available ?? entitlement.baseDays)}" required>
+          <span class="field-hint">Balance correction only. Existing leave requests remain unchanged.</span>
         </div>
         <div class="field">
           <label>Adjustment Reason</label>
@@ -2745,6 +2783,7 @@ function renderEntitlementManager(employee) {
               <label><input name="workSchedule" type="checkbox" value="${day}" ${selectedDays.has(day) ? "checked" : ""}> ${label}</label>
             `).join("")}
           </div>
+          <span class="field-hint">Used to count leave days and calculate four weeks of Paternity Leave.</span>
         </fieldset>
         <button class="button small" type="submit">Save Schedule</button>
       </form>
@@ -2756,7 +2795,7 @@ function renderEntitlementManager(employee) {
       <form class="entitlement-create-form entitlement-grid" data-form="leave-entitlement" data-employee-id="${employee.id}">
         <div class="field">
           <label>Leave Type</label>
-          <select name="leaveType" required>
+          <select name="leaveType" aria-describedby="entitlement-guidance-${escapeHtml(employee.id)}" required>
             <option>Hospitalization Leave</option>
             <option>Compassionate Leave</option>
             <option>Paternity Leave</option>
@@ -2764,8 +2803,11 @@ function renderEntitlementManager(employee) {
             <option>Childcare Leave</option>
           </select>
         </div>
+        <div class="entitlement-guidance full" id="entitlement-guidance-${escapeHtml(employee.id)}" data-entitlement-guidance role="note" aria-live="polite">
+          ${entitlementGrantGuidanceHtml("Hospitalization Leave")}
+        </div>
         <div class="field"><label>Period Year</label><input name="periodYear" type="number" value="${currentYearText()}"></div>
-        <div class="field"><label>Entitlement Days</label><input name="baseDays" type="number" min="0" step="0.5"></div>
+        <div class="field"><label>Entitlement Days</label><input name="baseDays" type="number" min="0" step="0.5"><span class="field-hint">Total allowance, not the remaining balance.</span></div>
         <div class="field"><label>Event Date</label><input name="eventDate" type="date"></div>
         <div class="field"><label>Valid From</label><input name="validFrom" type="date"></div>
         <div class="field"><label>Valid Until / Expiry</label><input name="validUntil" type="date"></div>
@@ -3583,6 +3625,14 @@ function updateHistoryFilter(field) {
 }
 
 document.addEventListener("change", (event) => {
+  const entitlementTypeField = event.target.closest(
+    "form[data-form='leave-entitlement'] select[name='leaveType']"
+  );
+  if (entitlementTypeField) {
+    updateEntitlementGrantGuidance(entitlementTypeField.form);
+    return;
+  }
+
   const leaveField = event.target.closest(
     "form[data-form='leave'] select[name='type'], form[data-form='leave'] input[name='startDate'], form[data-form='leave'] input[name='endDate']"
   );

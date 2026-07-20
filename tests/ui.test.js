@@ -88,6 +88,18 @@ test("admin directory includes inline entitlement management", () => {
   });
 });
 
+test("entitlement manager gives admins leave-type-specific field guidance", () => {
+  assert.match(appSource, /ENTITLEMENT_GRANT_GUIDANCE/);
+  assert.match(appSource, /Complete:/);
+  assert.match(appSource, /combined limit, normally 60 days, not the additional 46 days/);
+  assert.match(appSource, /four-week entitlement is calculated from Scheduled Working Days/);
+  assert.match(appSource, /continuous 16-week period of exactly 112 calendar days/);
+  assert.match(appSource, /Total allowance, not the remaining balance/);
+  assert.match(appSource, /Balance correction only\. Existing leave requests remain unchanged/);
+  assert.match(appSource, /aria-live="polite"/);
+  assert.match(cssSource, /\.entitlement-guidance\s*\{/);
+});
+
 test("entitlement management is responsive and unframed", () => {
   assert.match(cssSource, /\.entitlement-manager\s*\{/);
   assert.match(cssSource, /\.entitlement-grid\s*\{[\s\S]*grid-template-columns/);
