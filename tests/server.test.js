@@ -931,7 +931,7 @@ test("dashboard exposes shadow summaries while disabled policy does not require 
     reason: "Bereavement"
   });
   assert.equal(request.status, "pending");
-  assert.equal(request.entitlementId, undefined);
+  assert.equal(request.entitlementId, null);
 });
 
 test("setEmployeeWorkSchedule is admin-only and audits the change", () => {
@@ -1106,6 +1106,122 @@ test("createLeaveRequest requires medical documents for hospitalization leave", 
   assert.equal(request.type, "Hospitalization Leave");
   assert.equal(request.days, 1);
   assert.equal(request.medicalCertificate.originalName, "hospitalization-letter.pdf");
+});
+
+test("enabled hospitalization enforcement uses the combined medical pool", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01",
+    leavePolicyYear: 2026,
+    medicalLeaveEntitlement: 14
+  };
+  const db = __test.normalizeDb({
+    users: [employee],
+    leavePolicySettings: [{
+      leaveType: "Hospitalization Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-07-20T00:00:00.000Z"
+    }],
+    leaveRequests: [
+      { employeeId: employee.id, type: "Medical Leave", status: "approved", days: 14, leaveYear: 2026 },
+      { employeeId: employee.id, type: "Hospitalization Leave", status: "pending", days: 45, leaveYear: 2026 }
+    ]
+  });
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "Hospitalization Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-22"
+  }), /combined Medical and Hospitalization balance has only 1 day remaining/);
+});
+
+test("enabled medical enforcement checks both outpatient and combined pools", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01",
+    leavePolicyYear: 2026,
+    medicalLeaveEntitlement: 14
+  };
+  const settings = [{
+    leaveType: "Medical Leave",
+    enforcementEnabled: true,
+    updatedAt: "2026-07-20T00:00:00.000Z"
+  }];
+  const outpatientDb = __test.normalizeDb({
+    users: [employee],
+    leavePolicySettings: settings,
+    leaveRequests: [
+      { employeeId: employee.id, type: "Medical Leave", status: "pending", days: 14, leaveYear: 2026 }
+    ]
+  });
+  await assert.rejects(() => __test.createLeaveRequest(outpatientDb, employee, {
+    type: "Medical Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-21"
+  }), /outpatient Medical Leave balance has only 0 days remaining/);
+
+  const combinedDb = __test.normalizeDb({
+    users: [employee],
+    leavePolicySettings: settings,
+    leaveRequests: [
+      { employeeId: employee.id, type: "Hospitalization Leave", status: "approved", days: 60, leaveYear: 2026 }
+    ]
+  });
+  await assert.rejects(() => __test.createLeaveRequest(combinedDb, employee, {
+    type: "Medical Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-21"
+  }), /combined Medical and Hospitalization balance has only 0 days remaining/);
+});
+
+test("medical override applies and cancelled requests release combined capacity", async (t) => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    serviceStartDate: "2025-01-01",
+    leavePolicyYear: 2026,
+    medicalLeaveEntitlement: 14,
+    medicalLeaveEntitlementOverride: 16
+  };
+  const db = __test.normalizeDb({
+    users: [employee],
+    leavePolicySettings: [{
+      leaveType: "Medical Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-07-20T00:00:00.000Z"
+    }],
+    leaveRequests: [
+      { employeeId: employee.id, type: "Medical Leave", status: "approved", days: 14, leaveYear: 2026 },
+      { employeeId: employee.id, type: "Hospitalization Leave", status: "cancelled", days: 46, leaveYear: 2026 }
+    ],
+    emails: []
+  });
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Medical Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-22",
+    medicalCertificate: {
+      name: "override-mc.pdf",
+      type: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\noverride\n", "utf8")
+    }
+  });
+  t.after(() => fs.rm(path.join(__dirname, "..", "data", "uploads", request.medicalCertificate.storedName), { force: true }));
+
+  assert.equal(request.days, 2);
+  assert.equal(request.status, "pending");
 });
 
 test("createClaim routes claims to the separate claims approver", async () => {

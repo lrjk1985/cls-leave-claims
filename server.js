@@ -37,7 +37,8 @@ const {
   LEAVE_TYPES,
   medicalHospitalizationSummary,
   normalizeWorkSchedule,
-  paternityGrantDays
+  paternityGrantDays,
+  scheduledDaysBetween
 } = require("./src/leaveEntitlements");
 const {
   getSingaporePublicHolidaysForRange,
@@ -2796,6 +2797,26 @@ function policyEnforcementEnabled(db, type) {
   );
 }
 
+function medicalEnforcementContext(db, employee, year, asOfDate) {
+  const hospitalizationEntitlement = findActiveEntitlement(db.leaveEntitlements || [], {
+    employeeId: employee.id,
+    leaveType: LEAVE_TYPES.HOSPITALIZATION,
+    date: asOfDate,
+    year
+  });
+  const combinedEntitlementOverride = hospitalizationEntitlement
+    ? Number(hospitalizationEntitlement.overrideDays ?? hospitalizationEntitlement.baseDays)
+    : undefined;
+  return {
+    hospitalizationEntitlement,
+    summary: medicalHospitalizationSummary(employee, db.leaveRequests, {
+      year,
+      asOfDate,
+      combinedEntitlementOverride
+    })
+  };
+}
+
 function leaveEntitlementSummaries(db, viewer, options = {}) {
   const asOfDate = options.asOfDate || formatIsoDate(new Date());
   const year = Number(options.year || asOfDate.slice(0, 4));
@@ -3508,6 +3529,7 @@ async function createLeaveRequest(db, user, body) {
 
   const type = String(body.type || "Annual Leave").trim();
   const isMedicalLeave = isMedicalLeaveType(type);
+  const isHospitalizationLeave = type.toLowerCase() === LEAVE_TYPES.HOSPITALIZATION.toLowerCase();
   const isSpecialLeave = isSpecialLeaveType(type);
   const needsMedicalCertificate = requiresMedicalCertificate(type);
   const reason = String(body.reason || "").trim();
@@ -3519,16 +3541,33 @@ async function createLeaveRequest(db, user, body) {
 
   const publicHolidays = await getSingaporePublicHolidaysForRange(startDate, endDate);
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
-  const days = breakdown.days;
+  const days = isMedicalLeave || isHospitalizationLeave
+    ? scheduledDaysBetween(startDate, endDate, user.workSchedule, publicHolidays)
+    : breakdown.days;
   const leaveYear = Number(startDate.slice(0, 4));
 
   if (days <= 0) {
     throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
   }
   if (isMedicalLeave) {
-    const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
-    if (days > summary.unreserved) {
-      throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
+    if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL)) {
+      const { summary } = medicalEnforcementContext(db, user, leaveYear, startDate);
+      if (days > summary.outpatient.unreserved) {
+        throw new Error(`This request needs ${days} days, but the outpatient Medical Leave balance has only ${summary.outpatient.unreserved} day${summary.outpatient.unreserved === 1 ? "" : "s"} remaining.`);
+      }
+      if (days > summary.combined.unreserved) {
+        throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
+      }
+    } else {
+      const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
+      if (days > summary.unreserved) {
+        throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
+      }
+    }
+  } else if (isHospitalizationLeave && policyEnforcementEnabled(db, LEAVE_TYPES.HOSPITALIZATION)) {
+    const { summary } = medicalEnforcementContext(db, user, leaveYear, startDate);
+    if (days > summary.combined.unreserved) {
+      throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
     }
   } else if (!isSpecialLeave) {
     const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
@@ -3553,6 +3592,14 @@ async function createLeaveRequest(db, user, body) {
     excludedDates: breakdown.excludedDates,
     reason,
     medicalCertificate: null,
+    entitlementId: null,
+    countingMethod: isMedicalLeave || isHospitalizationLeave
+      ? COUNTING_METHODS.SCHEDULED
+      : COUNTING_METHODS.SCHEDULED,
+    workScheduleSnapshot: isMedicalLeave || isHospitalizationLeave
+      ? normalizeWorkSchedule(user.workSchedule)
+      : null,
+    supportingDocument: null,
     status: "pending",
     decisionNote: "",
     createdAt,
