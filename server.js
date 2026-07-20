@@ -2162,6 +2162,40 @@ async function createMedicalCertificateUploadUrl(user, body) {
   };
 }
 
+async function createSupportingDocumentUploadUrl(user, body) {
+  if (!isSupabaseEnabled()) return { direct: false };
+
+  const metadata = receiptUploadMetadata(body);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(metadata.extension) === metadata.mimeType
+    ? metadata.extension
+    : RECEIPT_MIME_EXTENSIONS.get(metadata.mimeType) || metadata.extension || ".receipt";
+  const storedName = `supporting-documents/${user.id}/${id("document")}${extension}`;
+  const uploadEndpoint = storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName, "object/upload/sign");
+  const response = await supabaseRequest(uploadEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: 600 })
+  });
+  const payload = await response.json();
+  const uploadData = payload.data || payload;
+  const signedUrl = resolveSupabaseSignedUrl(
+    uploadData.signedURL || uploadData.signedUrl || uploadData.url,
+    uploadData.token,
+    uploadEndpoint
+  );
+  return {
+    direct: true,
+    storage: "supabase",
+    bucket: SUPABASE_RECEIPT_BUCKET,
+    originalName: metadata.originalName,
+    mimeType: metadata.mimeType,
+    size: metadata.size,
+    storedName,
+    signedUrl,
+    method: "PUT"
+  };
+}
+
 async function receiptFromSupabaseUpload(user, upload) {
   if (!upload || typeof upload !== "object") {
     throw new Error("Receipt upload details are required.");
@@ -2215,6 +2249,33 @@ async function medicalCertificateFromSupabaseUpload(user, upload) {
   const buffer = Buffer.from(await response.arrayBuffer());
   const parsed = parseReceipt({ name: originalName, buffer });
 
+  return {
+    storage: "supabase",
+    bucket,
+    originalName: parsed.originalName,
+    mimeType: parsed.mimeType,
+    size: parsed.buffer.length,
+    storedName,
+    uploadedAt: nowIso()
+  };
+}
+
+async function supportingDocumentFromSupabaseUpload(user, upload) {
+  if (!upload || typeof upload !== "object") {
+    throw new Error("Supporting document upload details are required.");
+  }
+  const storedName = String(upload.storedName || "");
+  if (!storedName.startsWith(`supporting-documents/${user.id}/`)) {
+    throw new Error("Supporting document upload path is invalid.");
+  }
+  const bucket = String(upload.bucket || SUPABASE_RECEIPT_BUCKET);
+  if (bucket !== SUPABASE_RECEIPT_BUCKET) {
+    throw new Error("Supporting document upload bucket is invalid.");
+  }
+  const originalName = safeReceiptName(upload.originalName);
+  const response = await supabaseRequest(storageObjectEndpoint(bucket, storedName));
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const parsed = parseReceipt({ name: originalName, buffer });
   return {
     storage: "supabase",
     bucket,
@@ -2320,6 +2381,43 @@ async function saveMedicalCertificateAttachment(requestId, certificate) {
   };
 }
 
+async function saveSupportingDocumentAttachment(requestId, document) {
+  const parsed = parseReceipt(document);
+  const originalExtension = receiptExtension(parsed.originalName);
+  const extension = RECEIPT_EXTENSION_MIME_TYPES.get(originalExtension) === parsed.mimeType
+    ? originalExtension
+    : RECEIPT_MIME_EXTENSIONS.get(parsed.mimeType);
+  const storedName = isSupabaseEnabled()
+    ? `supporting-documents/${requestId}${extension || ".receipt"}`
+    : `supporting-document-${requestId}${extension || ".receipt"}`;
+  if (isSupabaseEnabled()) {
+    await supabaseRequest(storageObjectEndpoint(SUPABASE_RECEIPT_BUCKET, storedName), {
+      method: "POST",
+      headers: { "Content-Type": parsed.mimeType, "x-upsert": "true" },
+      body: parsed.buffer
+    });
+    return {
+      storage: "supabase",
+      bucket: SUPABASE_RECEIPT_BUCKET,
+      originalName: parsed.originalName,
+      mimeType: parsed.mimeType,
+      size: parsed.buffer.length,
+      storedName,
+      uploadedAt: nowIso()
+    };
+  }
+  await fs.mkdir(UPLOAD_DIR, { recursive: true });
+  await fs.writeFile(safeLocalReceiptPath(storedName), parsed.buffer);
+  return {
+    storage: "local",
+    originalName: parsed.originalName,
+    mimeType: parsed.mimeType,
+    size: parsed.buffer.length,
+    storedName,
+    uploadedAt: nowIso()
+  };
+}
+
 async function readReceiptAttachment(claim) {
   if (claim.receipt?.deletedAt) {
     const error = new Error("Receipt has been removed under the 5-year retention policy.");
@@ -2349,6 +2447,22 @@ async function readMedicalCertificateAttachment(request) {
   }
 
   return fs.readFile(safeLocalReceiptPath(request.medicalCertificate.storedName));
+}
+
+async function readSupportingDocumentAttachment(request) {
+  const document = request.supportingDocument;
+  if (document?.storage === "supabase") {
+    const response = await supabaseRequest(storageObjectEndpoint(
+      document.bucket || SUPABASE_RECEIPT_BUCKET,
+      String(document.storedName || "")
+    ));
+    return Buffer.from(await response.arrayBuffer());
+  }
+  return fs.readFile(safeLocalReceiptPath(document.storedName));
+}
+
+function canViewLeaveDocument(user, request) {
+  return Boolean(user && request && (request.employeeId === user.id || canReview(user, request)));
 }
 
 async function deleteReceiptAttachment(receipt) {
@@ -3632,8 +3746,10 @@ async function createLeaveRequest(db, user, body) {
   const type = String(body.type || "Annual Leave").trim();
   const isMedicalLeave = isMedicalLeaveType(type);
   const isHospitalizationLeave = type.toLowerCase() === LEAVE_TYPES.HOSPITALIZATION.toLowerCase();
+  const isNationalServiceLeave = type === LEAVE_TYPES.NATIONAL_SERVICE;
   const isSpecialLeave = isSpecialLeaveType(type);
   const needsMedicalCertificate = requiresMedicalCertificate(type);
+  const needsSupportingDocument = isNationalServiceLeave && policyEnforcementEnabled(db, type);
   const reason = String(body.reason || "").trim();
   const startDate = String(body.startDate || "");
   const endDate = String(body.endDate || "");
@@ -3677,7 +3793,7 @@ async function createLeaveRequest(db, user, body) {
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
   const usesCalendarDays = type === LEAVE_TYPES.MATERNITY && Boolean(linkedEntitlement);
   const usesScheduleSnapshot = !usesCalendarDays && (
-    isMedicalLeave || isHospitalizationLeave || Boolean(linkedEntitlement)
+    isMedicalLeave || isHospitalizationLeave || isNationalServiceLeave || Boolean(linkedEntitlement)
   );
   const workScheduleSnapshot = linkedEntitlement || usesScheduleSnapshot
     ? normalizeWorkSchedule(linkedEntitlement?.workScheduleSnapshot || user.workSchedule)
@@ -3729,6 +3845,9 @@ async function createLeaveRequest(db, user, body) {
   if (needsMedicalCertificate && !body.medicalCertificateUpload && !body.medicalCertificate) {
     throw new Error(`A Medical Certificate attachment is required for ${type}.`);
   }
+  if (needsSupportingDocument && !body.supportingDocumentUpload && !body.supportingDocument) {
+    throw new Error("An Official Call-Up Notice attachment is required for National Service Leave.");
+  }
 
   const createdAt = nowIso();
   const request = {
@@ -3744,7 +3863,11 @@ async function createLeaveRequest(db, user, body) {
     reason,
     medicalCertificate: null,
     entitlementId: linkedEntitlement?.id || null,
-    countingMethod: usesCalendarDays ? COUNTING_METHODS.CALENDAR : COUNTING_METHODS.SCHEDULED,
+    countingMethod: isNationalServiceLeave
+      ? COUNTING_METHODS.UNCAPPED_SCHEDULED
+      : usesCalendarDays
+        ? COUNTING_METHODS.CALENDAR
+        : COUNTING_METHODS.SCHEDULED,
     workScheduleSnapshot,
     supportingDocument: null,
     status: "pending",
@@ -3760,6 +3883,11 @@ async function createLeaveRequest(db, user, body) {
       ? await medicalCertificateFromSupabaseUpload(user, body.medicalCertificateUpload)
       : await saveMedicalCertificateAttachment(request.id, body.medicalCertificate);
   }
+  if (needsSupportingDocument) {
+    request.supportingDocument = body.supportingDocumentUpload
+      ? await supportingDocumentFromSupabaseUpload(user, body.supportingDocumentUpload)
+      : await saveSupportingDocumentAttachment(request.id, body.supportingDocument);
+  }
 
   db.leaveRequests.unshift(request);
   await addEmail(db, {
@@ -3769,6 +3897,7 @@ async function createLeaveRequest(db, user, body) {
     body: [
       `${user.name} has applied for ${days} working day(s) of ${type} from ${startDate} to ${endDate}.`,
       needsMedicalCertificate ? "A Medical Certificate has been uploaded in CLS Leave & Claims for your review." : "",
+      needsSupportingDocument ? "An Official Call-Up Notice has been uploaded for your review." : "",
       "Please review the leave request in CLS Leave & Claims.",
       `Use the attached calendar file (${user.name} on leave) to add this leave period to your calendar.`
     ].filter(Boolean).join("\n\n"),
@@ -4208,6 +4337,10 @@ async function handleApi(req, res, pathname) {
     return jsonResponse(res, 200, { data: await createMedicalCertificateUploadUrl(user, body) });
   }
 
+  if (req.method === "POST" && pathname === "/api/leave-supporting-documents/upload-url") {
+    return jsonResponse(res, 200, { data: await createSupportingDocumentUploadUrl(user, body) });
+  }
+
   if (req.method === "POST" && pathname === "/api/leave-adjustments") {
     requireAdmin(user);
     const adjustment = createLeaveAdjustment(db, user, body);
@@ -4387,7 +4520,8 @@ async function handleApi(req, res, pathname) {
         endDate: request.endDate,
         days: request.days,
         excludedDates: request.excludedDates,
-        hasMedicalCertificate: Boolean(request.medicalCertificate)
+        hasMedicalCertificate: Boolean(request.medicalCertificate),
+        hasSupportingDocument: Boolean(request.supportingDocument)
       }
     });
     await saveDbAndDeliverQueuedEmails(db);
@@ -4492,6 +4626,25 @@ async function handleApi(req, res, pathname) {
       "Content-Length": certificate.length
     });
     return res.end(certificate);
+  }
+
+  const supportingDocumentMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/supporting-document$/);
+  if (supportingDocumentMatch && req.method === "GET") {
+    const request = db.leaveRequests.find((item) => item.id === supportingDocumentMatch[1]);
+    if (!request) return jsonResponse(res, 404, { error: "Leave request was not found." });
+    if (!canViewLeaveDocument(user, request)) {
+      return jsonResponse(res, 403, { error: "You cannot view this supporting document." });
+    }
+    if (!request.supportingDocument?.storedName) {
+      return jsonResponse(res, 404, { error: "No supporting document is attached to this leave request." });
+    }
+    const document = await readSupportingDocumentAttachment(request);
+    res.writeHead(200, {
+      "Content-Type": request.supportingDocument.mimeType || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${request.supportingDocument.originalName || "supporting-document"}"`,
+      "Content-Length": document.length
+    });
+    return res.end(document);
   }
 
   if (req.method === "POST" && (pathname === "/api/medical-claims" || pathname === "/api/claims")) {
@@ -4616,6 +4769,7 @@ module.exports = {
     addMaintenanceAuditEvents,
     applyLeaveYearRollover,
     auditPage,
+    canViewLeaveDocument,
     cancelLeaveRequest,
     createClaim,
     createEntitlementAdjustment,

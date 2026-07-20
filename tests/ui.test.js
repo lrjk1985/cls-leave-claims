@@ -64,3 +64,10 @@ test("leave form includes separately tracked HR leave categories", () => {
   assert.match(appSource, /requiresMedicalCertificate\(body\.type\)/);
   assert.match(appSource, /requiresMedicalCertificate\(typeField\.value\)/);
 });
+
+test("National Service Leave requests an official call-up notice", () => {
+  assert.match(appSource, /Official Call-Up Notice/);
+  assert.match(appSource, /\/api\/leave-supporting-documents\/upload-url/);
+  assert.match(appSource, /supportingDocumentUpload/);
+  assert.match(appSource, /uncapped_scheduled_days|National Service Leave/);
+});

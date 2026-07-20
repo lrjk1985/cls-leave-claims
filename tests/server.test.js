@@ -1441,6 +1441,59 @@ test("Maternity requests must match one verified 112-day grant block", async () 
   }), /already has an active request/);
 });
 
+test("enabled National Service Leave requires a call-up notice and remains uncapped", async (t) => {
+  const manager = { id: "usr_manager", name: "Manager", email: "manager@cls.local", role: "manager" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    active: true,
+    managerId: manager.id,
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 3, 5],
+    leavePolicyYear: 2026,
+    leaveEntitlement: 0,
+    medicalLeaveEntitlement: 0
+  };
+  const db = __test.normalizeDb({
+    users: [manager, employee],
+    leavePolicySettings: [{
+      leaveType: "National Service Leave",
+      enforcementEnabled: true,
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    }],
+    leaveRequests: [],
+    emails: []
+  });
+
+  await assert.rejects(() => __test.createLeaveRequest(db, employee, {
+    type: "National Service Leave",
+    startDate: "2026-07-20",
+    endDate: "2026-07-26"
+  }), /Official Call-Up Notice attachment is required/);
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "National Service Leave",
+    startDate: "2026-07-20",
+    endDate: "2026-07-26",
+    supportingDocument: {
+      name: "call-up-notice.pdf",
+      type: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\ncall-up\n", "utf8")
+    }
+  });
+  t.after(() => fs.rm(path.join(__dirname, "..", "data", "uploads", request.supportingDocument.storedName), { force: true }));
+
+  assert.equal(request.days, 3);
+  assert.equal(request.countingMethod, "uncapped_scheduled_days");
+  assert.equal(request.entitlementId, null);
+  assert.equal(request.supportingDocument.originalName, "call-up-notice.pdf");
+  assert.equal(__test.canViewLeaveDocument(manager, request), true);
+  assert.equal(__test.canViewLeaveDocument({ id: "usr_other", role: "employee" }, request), false);
+  assert.equal(medicalLeaveSummary(employee, db.leaveRequests).approved, 0);
+});
+
 test("createClaim routes claims to the separate claims approver", async () => {
   const employee = {
     id: "usr_employee",

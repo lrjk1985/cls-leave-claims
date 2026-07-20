@@ -930,6 +930,17 @@ function requiresMedicalCertificate(type) {
   return normalizedType === "medical leave" || normalizedType === "hospitalization leave";
 }
 
+function isNationalServiceLeave(type) {
+  return String(type || "").trim().toLowerCase() === "national service leave";
+}
+
+function leavePolicyEnforcementEnabled(type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  return Boolean(state.dashboard?.leavePolicySettings?.find(
+    (setting) => String(setting.leaveType || "").trim().toLowerCase() === normalizedType
+  )?.enforcementEnabled);
+}
+
 function newClaimSubmissionId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1043,22 +1054,44 @@ async function uploadMedicalCertificateToSignedUrl(upload, file) {
   }
 }
 
+async function uploadSupportingDocumentToSignedUrl(upload, file) {
+  const response = await fetch(upload.signedUrl, {
+    method: upload.method || "PUT",
+    headers: {
+      "Content-Type": upload.mimeType || file.type || "application/octet-stream",
+      "cache-control": "3600"
+    },
+    body: file
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Supporting document upload failed: ${text || response.statusText}`);
+  }
+}
+
 async function leaveFormPayload(form, body) {
-  if (!requiresMedicalCertificate(body.type)) {
+  const medicalDocument = requiresMedicalCertificate(body.type);
+  const nationalServiceDocument = isNationalServiceLeave(body.type) &&
+    leavePolicyEnforcementEnabled(body.type);
+  if (!medicalDocument && !nationalServiceDocument) {
     const leaveBody = { ...body };
-    delete leaveBody.medicalCertificate;
+    delete leaveBody.supportingDocument;
     return { body: JSON.stringify(leaveBody) };
   }
 
-  const file = form.querySelector("input[type='file'][name='medicalCertificate']")?.files?.[0];
+  const file = form.querySelector("input[type='file'][name='supportingDocument']")?.files?.[0];
+  const documentLabel = nationalServiceDocument ? "Official Call-Up Notice" : "Medical Certificate";
   if (!file) {
-    throw new Error(`Please upload a Medical Certificate for ${body.type}.`);
+    throw new Error(`Please upload ${nationalServiceDocument ? "an" : "a"} ${documentLabel} for ${body.type}.`);
   }
-  assertMedicalCertificateFile(file);
+  assertAttachmentFile(file, documentLabel);
 
   const leaveBody = { ...body };
-  delete leaveBody.medicalCertificate;
-  const upload = await api("/api/leave-medical-certificates/upload-url", {
+  delete leaveBody.supportingDocument;
+  const uploadEndpoint = nationalServiceDocument
+    ? "/api/leave-supporting-documents/upload-url"
+    : "/api/leave-medical-certificates/upload-url";
+  const upload = await api(uploadEndpoint, {
     method: "POST",
     body: JSON.stringify({
       name: file.name,
@@ -1067,8 +1100,9 @@ async function leaveFormPayload(form, body) {
     })
   });
   if (upload.direct) {
-    await uploadMedicalCertificateToSignedUrl(upload, file);
-    leaveBody.medicalCertificateUpload = {
+    if (nationalServiceDocument) await uploadSupportingDocumentToSignedUrl(upload, file);
+    else await uploadMedicalCertificateToSignedUrl(upload, file);
+    const uploadMetadata = {
       storage: upload.storage,
       bucket: upload.bucket,
       storedName: upload.storedName,
@@ -1076,12 +1110,14 @@ async function leaveFormPayload(form, body) {
       mimeType: upload.mimeType,
       size: upload.size
     };
+    if (nationalServiceDocument) leaveBody.supportingDocumentUpload = uploadMetadata;
+    else leaveBody.medicalCertificateUpload = uploadMetadata;
     return { body: JSON.stringify(leaveBody) };
   }
 
   const formData = new FormData();
   Object.entries(leaveBody).forEach(([key, value]) => formData.set(key, value));
-  formData.set("medicalCertificate", file, file.name);
+  formData.set(nationalServiceDocument ? "supportingDocument" : "medicalCertificate", file, file.name);
   return { body: formData };
 }
 
@@ -1901,8 +1937,8 @@ function renderLeave() {
               <div class="field-hint">Special leave is tracked separately from annual leave. Eligibility is reviewed during approval.</div>
             </div>
             <div class="field full" data-medical-certificate-field hidden>
-              <label for="leave-medical-certificate">Medical Certificate / Hospitalization Document</label>
-              <input id="leave-medical-certificate" name="medicalCertificate" type="file" accept="${RECEIPT_ACCEPT}" disabled>
+              <label for="leave-supporting-document" data-leave-document-label>Medical Certificate / Hospitalization Document</label>
+              <input id="leave-supporting-document" name="supportingDocument" type="file" accept="${RECEIPT_ACCEPT}" disabled>
               <div class="field-hint">${RECEIPT_HELP_TEXT}</div>
             </div>
             <div class="field">
@@ -2102,14 +2138,26 @@ function excludedDatesText(item) {
 }
 
 function renderMedicalCertificateLink(item) {
-  if (!item.medicalCertificate?.storedName) return "";
-  const title = item.medicalCertificate.originalName || "Medical Certificate";
-  return `
+  const medicalLink = item.medicalCertificate?.storedName ? (() => {
+    const title = item.medicalCertificate.originalName || "Medical Certificate";
+    return `
+      <div>
+        <a class="receipt-link" href="/api/leave-requests/${item.id}/medical-certificate" target="_blank" rel="noreferrer" title="${escapeHtml(title)}">
+          Medical Certificate
+        </a>
+      </div>
+    `;
+  })() : "";
+  const supportingLink = item.supportingDocument?.storedName ? `
     <div>
-      <a class="receipt-link" href="/api/leave-requests/${item.id}/medical-certificate" target="_blank" rel="noreferrer" title="${escapeHtml(title)}">
-        Medical Certificate
+      <a class="receipt-link" href="/api/leave-requests/${item.id}/supporting-document" target="_blank" rel="noreferrer" title="${escapeHtml(item.supportingDocument.originalName || "Supporting Document")}">
+        Official Call-Up Notice
       </a>
     </div>
+  ` : "";
+  return `
+    ${medicalLink}
+    ${supportingLink}
   `;
 }
 
@@ -2729,13 +2777,22 @@ function formObject(form) {
 function updateMedicalCertificateField(form) {
   const typeField = form.querySelector("select[name='type']");
   const wrapper = form.querySelector("[data-medical-certificate-field]");
-  const fileInput = form.querySelector("input[name='medicalCertificate']");
+  const fileInput = form.querySelector("input[name='supportingDocument']");
+  const label = form.querySelector("[data-leave-document-label]");
   if (!typeField || !wrapper || !fileInput) return;
 
-  const required = requiresMedicalCertificate(typeField.value);
+  const medicalDocument = requiresMedicalCertificate(typeField.value);
+  const nationalServiceDocument = isNationalServiceLeave(typeField.value) &&
+    leavePolicyEnforcementEnabled(typeField.value);
+  const required = medicalDocument || nationalServiceDocument;
   wrapper.hidden = !required;
   fileInput.required = required;
   fileInput.disabled = !required;
+  if (label) {
+    label.textContent = nationalServiceDocument
+      ? "Official Call-Up Notice"
+      : "Medical Certificate / Hospitalization Document";
+  }
   if (!required) fileInput.value = "";
 }
 
