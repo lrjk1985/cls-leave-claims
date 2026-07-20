@@ -30,10 +30,14 @@ const {
   workingDaysBetween
 } = require("./src/domain");
 const {
+  calendarDaysBetween,
+  COUNTING_METHODS,
   entitlementSummary,
+  findActiveEntitlement,
   LEAVE_TYPES,
   medicalHospitalizationSummary,
-  normalizeWorkSchedule
+  normalizeWorkSchedule,
+  paternityGrantDays
 } = require("./src/leaveEntitlements");
 const {
   getSingaporePublicHolidaysForRange,
@@ -95,6 +99,31 @@ const ENTITLEMENT_POLICY_TYPES = Object.freeze([
   LEAVE_TYPES.CHILDCARE,
   LEAVE_TYPES.NATIONAL_SERVICE
 ]);
+const GRANT_RULES = Object.freeze({
+  [LEAVE_TYPES.HOSPITALIZATION]: {
+    periodKind: "annual",
+    countingMethod: COUNTING_METHODS.SCHEDULED
+  },
+  [LEAVE_TYPES.COMPASSIONATE]: {
+    periodKind: "annual",
+    countingMethod: COUNTING_METHODS.SCHEDULED
+  },
+  [LEAVE_TYPES.PATERNITY]: {
+    periodKind: "event",
+    countingMethod: COUNTING_METHODS.SCHEDULED,
+    eligibilityRequired: true
+  },
+  [LEAVE_TYPES.MATERNITY]: {
+    periodKind: "continuous",
+    countingMethod: COUNTING_METHODS.CALENDAR,
+    eligibilityRequired: true
+  },
+  [LEAVE_TYPES.CHILDCARE]: {
+    periodKind: "annual",
+    countingMethod: COUNTING_METHODS.SCHEDULED,
+    eligibilityRequired: true
+  }
+});
 
 function nowIso() {
   return new Date().toISOString();
@@ -2888,6 +2917,286 @@ function dashboardPatch(db, user) {
   };
 }
 
+function addCalendarYear(isoDate) {
+  const date = assertIsoDate(isoDate, "Event date");
+  date.setUTCFullYear(date.getUTCFullYear() + 1);
+  return formatIsoDate(date);
+}
+
+function entitlementRangesOverlap(left, right) {
+  const leftEnd = left.validUntil || "9999-12-31";
+  const rightEnd = right.validUntil || "9999-12-31";
+  return left.validFrom <= rightEnd && right.validFrom <= leftEnd;
+}
+
+function assertNoOverlappingEntitlement(db, candidate, excludedId = null) {
+  const overlap = (db.leaveEntitlements || []).find((entitlement) => {
+    if (entitlement.id === excludedId || entitlement.active === false) return false;
+    if (entitlement.employeeId !== candidate.employeeId || entitlement.leaveType !== candidate.leaveType) {
+      return false;
+    }
+    if (candidate.periodKind === "annual" || entitlement.periodKind === "annual") {
+      return Number(entitlement.periodYear) === Number(candidate.periodYear);
+    }
+    return entitlementRangesOverlap(entitlement, candidate);
+  });
+  if (overlap) {
+    throw new Error(`An overlapping active ${candidate.leaveType} entitlement already exists.`);
+  }
+}
+
+function normalizedGrantFields(employee, body) {
+  const leaveType = String(body.leaveType || "").trim();
+  const rule = GRANT_RULES[leaveType];
+  if (!rule) throw new Error("Leave entitlement type is invalid.");
+
+  const eligibilityVerified = Boolean(body.eligibilityVerified);
+  if (rule.eligibilityRequired && !eligibilityVerified) {
+    throw new Error(`${leaveType} eligibility must be verified by HR.`);
+  }
+
+  const eventDate = body.eventDate ? String(body.eventDate) : null;
+  if (eventDate) assertIsoDate(eventDate, "Event date");
+  if (leaveType === LEAVE_TYPES.PATERNITY && !eventDate) {
+    throw new Error("Paternity Leave event date is required.");
+  }
+
+  let periodYear = body.periodYear === null || body.periodYear === undefined
+    ? null
+    : Number(body.periodYear);
+  if (rule.periodKind === "annual" && !Number.isInteger(periodYear)) {
+    throw new Error(`${leaveType} period year is required.`);
+  }
+
+  let validFrom = body.validFrom ? String(body.validFrom) : null;
+  let validUntil = body.validUntil ? String(body.validUntil) : null;
+  if (rule.periodKind === "annual") {
+    validFrom ||= `${periodYear}-01-01`;
+    validUntil ||= `${periodYear}-12-31`;
+  } else if (leaveType === LEAVE_TYPES.PATERNITY) {
+    validFrom ||= eventDate;
+    validUntil ||= addCalendarYear(eventDate);
+  }
+  if (!validFrom) throw new Error(`${leaveType} valid from date is required.`);
+  assertIsoDate(validFrom, "Valid from date");
+  if (validUntil) assertIsoDate(validUntil, "Valid until date");
+  if (validUntil && validFrom > validUntil) {
+    throw new Error("Entitlement valid from date must be before or equal to valid until date.");
+  }
+
+  let baseDays;
+  if (leaveType === LEAVE_TYPES.PATERNITY) {
+    baseDays = paternityGrantDays(body.workScheduleSnapshot || employee.workSchedule);
+  } else if (leaveType === LEAVE_TYPES.MATERNITY) {
+    if (!validUntil) throw new Error("Maternity Leave valid until date is required.");
+    const duration = calendarDaysBetween(validFrom, validUntil);
+    if (duration !== 112 && !String(body.durationOverrideReason || "").trim()) {
+      throw new Error("Maternity Leave must cover exactly 112 calendar days.");
+    }
+    baseDays = duration;
+  } else {
+    if (body.baseDays === undefined || body.baseDays === null || body.baseDays === "") {
+      throw new Error(`${leaveType} entitlement days are required.`);
+    }
+    baseDays = normalizeLeaveDays(body.baseDays, `${leaveType} entitlement days`);
+  }
+
+  const overrideDays = body.overrideDays === null || body.overrideDays === undefined || body.overrideDays === ""
+    ? null
+    : normalizeLeaveDays(body.overrideDays, `${leaveType} override days`);
+  let childBirthDate = body.childBirthDate ? String(body.childBirthDate) : null;
+  if (leaveType === LEAVE_TYPES.CHILDCARE) {
+    if (!childBirthDate) throw new Error("Child date of birth is required for Childcare Leave.");
+    assertIsoDate(childBirthDate, "Child date of birth");
+  } else {
+    childBirthDate = null;
+  }
+
+  return {
+    employeeId: employee.id,
+    leaveType,
+    periodKind: rule.periodKind,
+    periodYear,
+    eventDate,
+    validFrom,
+    validUntil,
+    baseDays,
+    overrideDays,
+    eligibilityVerified,
+    workScheduleSnapshot: normalizeWorkSchedule(body.workScheduleSnapshot || employee.workSchedule),
+    childBirthDate,
+    active: body.active === undefined ? true : Boolean(body.active),
+    countingMethod: rule.countingMethod,
+    durationOverrideReason: String(body.durationOverrideReason || "").trim() || null
+  };
+}
+
+function setEmployeeWorkSchedule(db, actor, employeeId, schedule) {
+  requireAdmin(actor);
+  const employee = getUser(db, employeeId);
+  if (!employee) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+  const before = normalizeWorkSchedule(employee.workSchedule);
+  const workSchedule = normalizeWorkSchedule(schedule);
+  employee.workSchedule = workSchedule;
+  employee.updatedAt = nowIso();
+  addAuditEvent(db, actor, {
+    action: "employee.work_schedule_updated",
+    affectedUserId: employee.id,
+    relatedType: "employee",
+    relatedId: employee.id,
+    summary: `${actor.name} updated ${employee.name}'s work schedule.`,
+    metadata: { before, after: workSchedule }
+  });
+  return employee;
+}
+
+function createLeaveEntitlement(db, actor, body) {
+  requireAdmin(actor);
+  const employee = getUser(db, String(body.employeeId || "").trim());
+  if (!employee) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+  const {
+    countingMethod,
+    durationOverrideReason,
+    ...fields
+  } = normalizedGrantFields(employee, body);
+  assertNoOverlappingEntitlement(db, fields);
+  const createdAt = nowIso();
+  const entitlement = {
+    id: id("entitlement"),
+    ...fields,
+    eligibilityVerifiedBy: fields.eligibilityVerified ? actor.id : null,
+    eligibilityVerifiedAt: fields.eligibilityVerified ? createdAt : null,
+    createdBy: actor.id,
+    createdAt,
+    updatedAt: createdAt
+  };
+  if (!Array.isArray(db.leaveEntitlements)) db.leaveEntitlements = [];
+  db.leaveEntitlements.unshift(entitlement);
+  addAuditEvent(db, actor, {
+    action: "leave_entitlement.created",
+    affectedUserId: employee.id,
+    relatedType: "leave_entitlement",
+    relatedId: entitlement.id,
+    summary: `${actor.name} created ${entitlement.leaveType} entitlement for ${employee.name}.`,
+    metadata: { after: entitlement, countingMethod, durationOverrideReason }
+  });
+  return entitlement;
+}
+
+function updateLeaveEntitlement(db, actor, entitlementId, body) {
+  requireAdmin(actor);
+  const entitlement = (db.leaveEntitlements || []).find((item) => item.id === entitlementId);
+  if (!entitlement) {
+    const error = new Error("Leave entitlement was not found.");
+    error.status = 404;
+    throw error;
+  }
+  const employee = getUser(db, entitlement.employeeId);
+  const before = { ...entitlement };
+  const {
+    countingMethod,
+    durationOverrideReason,
+    ...fields
+  } = normalizedGrantFields(employee, {
+    ...entitlement,
+    ...body,
+    employeeId: entitlement.employeeId,
+    leaveType: entitlement.leaveType
+  });
+  assertNoOverlappingEntitlement(db, fields, entitlement.id);
+  const candidate = { ...entitlement, ...fields };
+  const summary = entitlementSummary(
+    candidate,
+    db.leaveRequests,
+    db.leaveEntitlementAdjustments || []
+  );
+  if (candidate.active && summary.unreserved < 0) {
+    throw new Error("Entitlement cannot be reduced below already approved and pending leave.");
+  }
+  Object.assign(entitlement, fields, {
+    eligibilityVerifiedBy: fields.eligibilityVerified ? actor.id : null,
+    eligibilityVerifiedAt: fields.eligibilityVerified ? nowIso() : null,
+    updatedAt: nowIso()
+  });
+  addAuditEvent(db, actor, {
+    action: "leave_entitlement.updated",
+    affectedUserId: employee.id,
+    relatedType: "leave_entitlement",
+    relatedId: entitlement.id,
+    summary: `${actor.name} updated ${entitlement.leaveType} entitlement for ${employee.name}.`,
+    metadata: { before, after: entitlement, countingMethod, durationOverrideReason }
+  });
+  return entitlement;
+}
+
+function createEntitlementAdjustment(db, actor, entitlementId, body) {
+  requireAdmin(actor);
+  const entitlement = (db.leaveEntitlements || []).find((item) => item.id === entitlementId);
+  if (!entitlement) {
+    const error = new Error("Leave entitlement was not found.");
+    error.status = 404;
+    throw error;
+  }
+  const reason = String(body.reason || "").trim();
+  if (!reason) throw new Error("Adjustment reason is required.");
+  const before = entitlementSummary(
+    entitlement,
+    db.leaveRequests,
+    db.leaveEntitlementAdjustments || []
+  );
+  let days;
+  if (body.desiredRemaining !== undefined) {
+    const desiredRemaining = Number(body.desiredRemaining);
+    if (!Number.isFinite(desiredRemaining) || desiredRemaining < 0) {
+      throw new Error("Desired remaining leave must be 0 or more.");
+    }
+    days = desiredRemaining - before.available;
+  } else {
+    days = Number(body.days);
+  }
+  days = normalizeSignedLeaveDays(days, "Entitlement adjustment days");
+  if (entitlement.periodKind === "continuous" && !Number.isInteger(days)) {
+    throw new Error("Continuous leave adjustments must use whole calendar days.");
+  }
+  if (days === 0) throw new Error("Adjustment does not change the remaining balance.");
+  if (before.unreserved + days < 0) {
+    throw new Error("Adjustment would reduce the unreserved balance below 0.");
+  }
+  const adjustment = {
+    id: id("entitlement_adjustment"),
+    entitlementId: entitlement.id,
+    actorId: actor.id,
+    days,
+    reason,
+    createdAt: nowIso()
+  };
+  if (!Array.isArray(db.leaveEntitlementAdjustments)) db.leaveEntitlementAdjustments = [];
+  db.leaveEntitlementAdjustments.unshift(adjustment);
+  const after = entitlementSummary(
+    entitlement,
+    db.leaveRequests,
+    db.leaveEntitlementAdjustments
+  );
+  const employee = getUser(db, entitlement.employeeId);
+  addAuditEvent(db, actor, {
+    action: "leave_entitlement.adjusted",
+    affectedUserId: entitlement.employeeId,
+    relatedType: "leave_entitlement_adjustment",
+    relatedId: adjustment.id,
+    summary: `${actor.name} adjusted ${entitlement.leaveType} for ${employee?.name || "employee"}.`,
+    metadata: { entitlementId: entitlement.id, days, reason, before, after }
+  });
+  return adjustment;
+}
+
 async function createEmployee(db, body) {
   const name = String(body.name || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
@@ -3720,6 +4029,73 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  const employeeWorkScheduleMatch = pathname.match(/^\/api\/employees\/([^/]+)\/work-schedule$/);
+  if (employeeWorkScheduleMatch && req.method === "PATCH") {
+    requireAdmin(user);
+    const employee = setEmployeeWorkSchedule(
+      db,
+      user,
+      employeeWorkScheduleMatch[1],
+      body.workSchedule ?? body.schedule
+    );
+    await saveDb(db);
+    return jsonResponse(res, 200, {
+      data: {
+        employee: publicEmployee(db, employee),
+        patch: dashboardPatch(db, user),
+        stale: { audit: true }
+      }
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/api/leave-entitlements") {
+    requireAdmin(user);
+    const entitlement = createLeaveEntitlement(db, user, body);
+    await saveDb(db);
+    return jsonResponse(res, 201, {
+      data: {
+        entitlement,
+        summary: entitlementSummary(entitlement, db.leaveRequests, db.leaveEntitlementAdjustments),
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
+  }
+
+  const entitlementAdjustmentMatch = pathname.match(/^\/api\/leave-entitlements\/([^/]+)\/adjustments$/);
+  if (entitlementAdjustmentMatch && req.method === "POST") {
+    requireAdmin(user);
+    const adjustment = createEntitlementAdjustment(db, user, entitlementAdjustmentMatch[1], body);
+    const entitlement = db.leaveEntitlements.find(
+      (item) => item.id === adjustment.entitlementId
+    );
+    await saveDb(db);
+    return jsonResponse(res, 201, {
+      data: {
+        adjustment,
+        entitlement,
+        summary: entitlementSummary(entitlement, db.leaveRequests, db.leaveEntitlementAdjustments),
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
+  }
+
+  const entitlementMatch = pathname.match(/^\/api\/leave-entitlements\/([^/]+)$/);
+  if (entitlementMatch && req.method === "PATCH") {
+    requireAdmin(user);
+    const entitlement = updateLeaveEntitlement(db, user, entitlementMatch[1], body);
+    await saveDb(db);
+    return jsonResponse(res, 200, {
+      data: {
+        entitlement,
+        summary: entitlementSummary(entitlement, db.leaveRequests, db.leaveEntitlementAdjustments),
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
+  }
+
   if (req.method === "POST" && pathname === "/api/employees") {
     requireAdmin(user);
     const employee = await createEmployee(db, body);
@@ -4048,7 +4424,9 @@ module.exports = {
     auditPage,
     cancelLeaveRequest,
     createClaim,
+    createEntitlementAdjustment,
     createLeaveAdjustment,
+    createLeaveEntitlement,
     createLeaveRequest,
     dashboard,
     deliverQueuedEmails,
@@ -4067,6 +4445,8 @@ module.exports = {
     sessions,
     storageObjectEndpoint,
     supabaseTableConfigs: SUPABASE_TABLES,
+    setEmployeeWorkSchedule,
+    updateLeaveEntitlement,
     updateEmployee,
     verifyPassword
   }

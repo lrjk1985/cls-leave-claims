@@ -934,6 +934,137 @@ test("dashboard exposes shadow summaries while disabled policy does not require 
   assert.equal(request.entitlementId, undefined);
 });
 
+test("setEmployeeWorkSchedule is admin-only and audits the change", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const manager = { id: "usr_manager", name: "Manager", email: "manager@cls.local", role: "manager" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({ users: [admin, manager, employee] });
+
+  assert.throws(
+    () => __test.setEmployeeWorkSchedule(db, manager, employee.id, [1, 2, 3, 4]),
+    (error) => error.status === 403
+  );
+  const updated = __test.setEmployeeWorkSchedule(db, admin, employee.id, [6, 2, 4]);
+
+  assert.deepEqual(updated.workSchedule, [2, 4, 6]);
+  assert.equal(db.auditEvents[0].action, "employee.work_schedule_updated");
+});
+
+test("createLeaveEntitlement validates grant type and eligibility", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    serviceStartDate: "2025-01-01",
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({ users: [admin, employee] });
+
+  const grant = __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Compassionate Leave",
+    periodYear: 2026,
+    validFrom: "2026-01-01",
+    validUntil: "2026-12-31",
+    baseDays: 3
+  });
+  assert.equal(grant.periodKind, "annual");
+  assert.equal(grant.baseDays, 3);
+  assert.equal(db.auditEvents[0].action, "leave_entitlement.created");
+
+  assert.throws(() => __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Paternity Leave",
+    eventDate: "2026-07-20"
+  }), /eligibility must be verified/);
+});
+
+test("maternity grants require one continuous 112-day period", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    serviceStartDate: "2025-01-01"
+  };
+  const db = __test.normalizeDb({ users: [admin, employee] });
+
+  assert.throws(() => __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Maternity Leave",
+    validFrom: "2026-07-20",
+    validUntil: "2026-11-07",
+    eligibilityVerified: true
+  }), /112 calendar days/);
+
+  const grant = __test.createLeaveEntitlement(db, admin, {
+    employeeId: employee.id,
+    leaveType: "Maternity Leave",
+    validFrom: "2026-07-20",
+    validUntil: "2026-11-08",
+    eligibilityVerified: true
+  });
+  assert.equal(grant.baseDays, 112);
+});
+
+test("createEntitlementAdjustment sets remaining without rewriting requests", () => {
+  const admin = { id: "usr_admin", name: "Admin", email: "admin@cls.local", role: "admin" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    serviceStartDate: "2025-01-01"
+  };
+  const entitlement = {
+    id: "ent_childcare_2026",
+    employeeId: employee.id,
+    leaveType: "Childcare Leave",
+    periodKind: "annual",
+    periodYear: 2026,
+    validFrom: "2026-01-01",
+    validUntil: "2026-12-31",
+    baseDays: 6,
+    overrideDays: null,
+    eligibilityVerified: true,
+    active: true
+  };
+  const request = {
+    id: "leave_1",
+    employeeId: employee.id,
+    entitlementId: entitlement.id,
+    status: "approved",
+    days: 2
+  };
+  const db = __test.normalizeDb({
+    users: [admin, employee],
+    leaveEntitlements: [entitlement],
+    leaveRequests: [request]
+  });
+
+  assert.throws(() => __test.createEntitlementAdjustment(db, admin, entitlement.id, {
+    desiredRemaining: 3
+  }), /reason is required/);
+
+  const adjustment = __test.createEntitlementAdjustment(db, admin, entitlement.id, {
+    desiredRemaining: 3,
+    reason: "HR correction"
+  });
+  assert.equal(adjustment.days, -1);
+  assert.equal(db.leaveRequests[0].days, 2);
+  assert.equal(db.auditEvents[0].action, "leave_entitlement.adjusted");
+});
+
 test("createLeaveRequest requires medical documents for hospitalization leave", async (t) => {
   const employee = {
     id: "usr_employee",
