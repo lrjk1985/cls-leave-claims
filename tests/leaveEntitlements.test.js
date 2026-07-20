@@ -2,6 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   calendarDaysBetween,
+  entitlementSummary,
+  findActiveEntitlement,
+  medicalHospitalizationSummary,
   normalizeWorkSchedule,
   paternityGrantDays,
   scheduledDaysBetween,
@@ -40,4 +43,70 @@ test("paternityGrantDays snapshots four work weeks and caps six days per week", 
   assert.equal(paternityGrantDays([1, 2, 3, 4, 5]), 20);
   assert.equal(paternityGrantDays([1, 2, 3, 4, 5, 6]), 24);
   assert.equal(paternityGrantDays([1, 2, 3, 4, 5, 6, 7]), 24);
+});
+
+test("entitlementSummary reserves pending days and applies adjustments", () => {
+  const summary = entitlementSummary(
+    { id: "ent_1", baseDays: 6, overrideDays: null },
+    [
+      { entitlementId: "ent_1", status: "approved", days: 2 },
+      { entitlementId: "ent_1", status: "pending", days: 1 }
+    ],
+    [{ entitlementId: "ent_1", days: 0.5 }]
+  );
+  assert.deepEqual(summary, {
+    entitlement: 6,
+    adjustments: 0.5,
+    approved: 2,
+    pending: 1,
+    available: 4.5,
+    unreserved: 3.5
+  });
+});
+
+test("medicalHospitalizationSummary enforces outpatient and combined pools", () => {
+  const summary = medicalHospitalizationSummary(
+    { id: "u1", serviceStartDate: "2025-01-01", medicalLeaveEntitlementOverride: null },
+    [
+      { employeeId: "u1", type: "Medical Leave", status: "approved", days: 10, leaveYear: 2026 },
+      { employeeId: "u1", type: "Hospitalization Leave", status: "pending", days: 20, leaveYear: 2026 }
+    ],
+    { year: 2026, asOfDate: "2026-07-20" }
+  );
+  assert.equal(summary.outpatient.unreserved, 4);
+  assert.equal(summary.combined.unreserved, 30);
+});
+
+test("findActiveEntitlement matches validity and rejects overlapping grants", () => {
+  const grants = [
+    {
+      id: "ent_1",
+      employeeId: "u1",
+      leaveType: "Compassionate Leave",
+      periodKind: "annual",
+      periodYear: 2026,
+      validFrom: "2026-01-01",
+      validUntil: "2026-12-31",
+      active: true
+    }
+  ];
+
+  assert.equal(findActiveEntitlement(grants, {
+    employeeId: "u1",
+    leaveType: "Compassionate Leave",
+    date: "2026-07-20",
+    year: 2026
+  }).id, "ent_1");
+  assert.equal(findActiveEntitlement(grants, {
+    employeeId: "u1",
+    leaveType: "Compassionate Leave",
+    date: "2027-01-01",
+    year: 2027
+  }), null);
+  assert.throws(() => findActiveEntitlement([...grants, { ...grants[0], id: "ent_2" }], {
+    employeeId: "u1",
+    leaveType: "Compassionate Leave",
+    date: "2026-07-20",
+    year: 2026
+  }), /overlapping active entitlements/);
 });

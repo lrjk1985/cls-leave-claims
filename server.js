@@ -29,7 +29,12 @@ const {
   requiresMedicalCertificate,
   workingDaysBetween
 } = require("./src/domain");
-const { normalizeWorkSchedule } = require("./src/leaveEntitlements");
+const {
+  entitlementSummary,
+  LEAVE_TYPES,
+  medicalHospitalizationSummary,
+  normalizeWorkSchedule
+} = require("./src/leaveEntitlements");
 const {
   getSingaporePublicHolidaysForRange,
   syncSingaporePublicHolidays
@@ -81,9 +86,27 @@ const HISTORY_MAX_LIMIT = 50;
 const SUPABASE_STATE_KEY = "default";
 const SUPABASE_RECEIPT_BUCKET = process.env.SUPABASE_RECEIPT_BUCKET || "claim-receipts";
 const sessions = new Map();
+const ENTITLEMENT_POLICY_TYPES = Object.freeze([
+  LEAVE_TYPES.MEDICAL,
+  LEAVE_TYPES.HOSPITALIZATION,
+  LEAVE_TYPES.COMPASSIONATE,
+  LEAVE_TYPES.PATERNITY,
+  LEAVE_TYPES.MATERNITY,
+  LEAVE_TYPES.CHILDCARE,
+  LEAVE_TYPES.NATIONAL_SERVICE
+]);
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function defaultLeavePolicySettings(updatedAt = nowIso()) {
+  return ENTITLEMENT_POLICY_TYPES.map((leaveType) => ({
+    leaveType,
+    enforcementEnabled: false,
+    updatedAt,
+    updatedBy: null
+  }));
 }
 
 function id(prefix) {
@@ -1308,7 +1331,7 @@ function seedProductionDb() {
     leaveAdjustments: [],
     leaveEntitlements: [],
     leaveEntitlementAdjustments: [],
-    leavePolicySettings: [],
+    leavePolicySettings: defaultLeavePolicySettings(createdAt),
     medicalClaims: [],
     sessions: [],
     auditEvents: [],
@@ -1478,7 +1501,7 @@ function seedDb() {
     leaveAdjustments: [],
     leaveEntitlements: [],
     leaveEntitlementAdjustments: [],
-    leavePolicySettings: [],
+    leavePolicySettings: defaultLeavePolicySettings(createdAt),
     medicalClaims: [medicalClaim],
     sessions: [],
     auditEvents: [],
@@ -2720,6 +2743,69 @@ function statusLabelForExport(status) {
   return "Pending";
 }
 
+function effectiveLeavePolicySettings(db) {
+  const configured = new Map(
+    (db.leavePolicySettings || []).map((setting) => [
+      String(setting.leaveType || "").trim().toLowerCase(),
+      setting
+    ])
+  );
+  return ENTITLEMENT_POLICY_TYPES.map((leaveType) => configured.get(leaveType.toLowerCase()) || {
+    leaveType,
+    enforcementEnabled: false,
+    updatedAt: null,
+    updatedBy: null
+  });
+}
+
+function policyEnforcementEnabled(db, type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  return Boolean(
+    (db.leavePolicySettings || []).find(
+      (setting) => String(setting.leaveType || "").trim().toLowerCase() === normalizedType
+    )?.enforcementEnabled
+  );
+}
+
+function leaveEntitlementSummaries(db, viewer, options = {}) {
+  const asOfDate = options.asOfDate || formatIsoDate(new Date());
+  const year = Number(options.year || asOfDate.slice(0, 4));
+  return db.users
+    .filter((employee) => canSeeEmployee(viewer, employee))
+    .map((employee) => {
+      const entitlements = (db.leaveEntitlements || []).filter(
+        (entitlement) => entitlement.employeeId === employee.id
+      );
+      const hospitalizationGrant = entitlements.find(
+        (entitlement) =>
+          entitlement.active !== false &&
+          entitlement.leaveType === LEAVE_TYPES.HOSPITALIZATION &&
+          entitlement.periodKind === "annual" &&
+          Number(entitlement.periodYear) === year
+      );
+      const combinedEntitlementOverride = hospitalizationGrant
+        ? Number(hospitalizationGrant.overrideDays ?? hospitalizationGrant.baseDays)
+        : undefined;
+
+      return {
+        employeeId: employee.id,
+        medicalHospitalization: medicalHospitalizationSummary(employee, db.leaveRequests, {
+          year,
+          asOfDate,
+          combinedEntitlementOverride
+        }),
+        entitlements: entitlements.map((entitlement) => ({
+          ...entitlement,
+          summary: entitlementSummary(
+            entitlement,
+            db.leaveRequests,
+            db.leaveEntitlementAdjustments || []
+          )
+        }))
+      };
+    });
+}
+
 function dashboard(db, user) {
   const employees = db.users.map((employee) => publicEmployee(db, employee));
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
@@ -2746,6 +2832,8 @@ function dashboard(db, user) {
     medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    leaveEntitlementSummaries: leaveEntitlementSummaries(db, user),
+    leavePolicySettings: effectiveLeavePolicySettings(db),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
     leaveAdjustments: canAdmin(user) ? (db.leaveAdjustments || []).slice(0, 10) : [],
     leaveRequests: pendingLeaveRequests,
@@ -2784,6 +2872,8 @@ function dashboardPatch(db, user) {
     medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    leaveEntitlementSummaries: leaveEntitlementSummaries(db, user),
+    leavePolicySettings: effectiveLeavePolicySettings(db),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
     leaveAdjustments: canAdmin(user) ? (db.leaveAdjustments || []).slice(0, 10) : [],
     emails: recentEmails,
@@ -3960,6 +4050,7 @@ module.exports = {
     createClaim,
     createLeaveAdjustment,
     createLeaveRequest,
+    dashboard,
     deliverQueuedEmails,
     limitSessionsForUser,
     medicalClaimsExport,
@@ -3967,6 +4058,7 @@ module.exports = {
     multipartBoundary,
     parseMultipartBuffer,
     parseReceipt,
+    policyEnforcementEnabled,
     pruneExpiredSessions,
     receiptUploadMetadata,
     recomputeEmployeeLeaveEntitlement,

@@ -114,6 +114,99 @@ function paternityGrantDays(schedule) {
   return Math.min(6, normalizeWorkSchedule(schedule).length) * 4;
 }
 
+function sumDays(items) {
+  return items.reduce((total, item) => total + Number(item.days || 0), 0);
+}
+
+function entitlementSummary(entitlement, requests = [], adjustments = []) {
+  const effectiveEntitlement = entitlement.overrideDays === null || entitlement.overrideDays === undefined
+    ? Number(entitlement.baseDays || 0)
+    : Number(entitlement.overrideDays);
+  const relevantRequests = requests.filter((request) => request.entitlementId === entitlement.id);
+  const approved = sumDays(relevantRequests.filter((request) => request.status === "approved"));
+  const pending = sumDays(relevantRequests.filter((request) => request.status === "pending"));
+  const adjustmentDays = sumDays(
+    adjustments.filter((adjustment) => adjustment.entitlementId === entitlement.id)
+  );
+
+  return {
+    entitlement: effectiveEntitlement,
+    adjustments: adjustmentDays,
+    approved,
+    pending,
+    available: effectiveEntitlement + adjustmentDays - approved,
+    unreserved: effectiveEntitlement + adjustmentDays - approved - pending
+  };
+}
+
+function requestYear(request) {
+  return Number(request.leaveYear || String(request.startDate || "").slice(0, 4));
+}
+
+function medicalHospitalizationSummary(user, requests = [], options = {}) {
+  const asOfDate = options.asOfDate || new Date().toISOString().slice(0, 10);
+  const year = Number(options.year || asOfDate.slice(0, 4));
+  const serviceEntitlement = serviceMedicalEntitlement(user.serviceStartDate, asOfDate);
+  const outpatientEntitlement = user.medicalLeaveEntitlementOverride === null ||
+    user.medicalLeaveEntitlementOverride === undefined
+    ? serviceEntitlement.outpatient
+    : Number(user.medicalLeaveEntitlementOverride);
+  const combinedEntitlement = options.combinedEntitlementOverride === null ||
+    options.combinedEntitlementOverride === undefined
+    ? Number(options.combinedEntitlement ?? serviceEntitlement.combined)
+    : Number(options.combinedEntitlementOverride);
+  const ownRequests = requests.filter(
+    (request) => request.employeeId === user.id && requestYear(request) === year
+  );
+  const outpatientRequests = ownRequests.filter((request) => isMedicalLeaveType(request.type));
+  const combinedRequests = ownRequests.filter((request) => {
+    const type = normalizedLeaveType(request.type);
+    return type === LEAVE_TYPES.MEDICAL.toLowerCase() ||
+      type === LEAVE_TYPES.HOSPITALIZATION.toLowerCase();
+  });
+
+  function poolSummary(entitlement, poolRequests) {
+    const approved = sumDays(poolRequests.filter((request) => request.status === "approved"));
+    const pending = sumDays(poolRequests.filter((request) => request.status === "pending"));
+    return {
+      entitlement,
+      approved,
+      pending,
+      available: entitlement - approved,
+      unreserved: entitlement - approved - pending
+    };
+  }
+
+  return {
+    year,
+    outpatient: poolSummary(outpatientEntitlement, outpatientRequests),
+    combined: poolSummary(combinedEntitlement, combinedRequests)
+  };
+}
+
+function findActiveEntitlement(entitlements = [], criteria = {}) {
+  const matches = entitlements.filter((entitlement) => {
+    if (entitlement.employeeId !== criteria.employeeId) return false;
+    if (normalizedLeaveType(entitlement.leaveType) !== normalizedLeaveType(criteria.leaveType)) return false;
+    if (entitlement.active === false) return false;
+    if (criteria.eligibilityRequired && !entitlement.eligibilityVerified) return false;
+    if (entitlement.periodKind === "annual" && Number(entitlement.periodYear) !== Number(criteria.year)) {
+      return false;
+    }
+    if (criteria.date) {
+      assertIsoDate(criteria.date, "Entitlement date");
+      if (entitlement.validFrom && criteria.date < entitlement.validFrom) return false;
+      if (entitlement.validUntil && criteria.date > entitlement.validUntil) return false;
+    }
+    return true;
+  });
+
+  if (matches.length > 1) {
+    throw new Error(`Found overlapping active entitlements for ${criteria.leaveType}.`);
+  }
+  return matches[0] || null;
+}
+
 function normalizedLeaveType(type) {
   return String(type || "").trim().toLowerCase();
 }
@@ -133,9 +226,12 @@ function requiresSupportingDocument(type) {
 module.exports = {
   calendarDaysBetween,
   COUNTING_METHODS,
+  entitlementSummary,
+  findActiveEntitlement,
   isMedicalLeaveType,
   isSpecialLeaveType,
   LEAVE_TYPES,
+  medicalHospitalizationSummary,
   normalizeWorkSchedule,
   paternityGrantDays,
   requiresSupportingDocument,

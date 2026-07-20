@@ -884,6 +884,56 @@ test("createLeaveRequest does not deduct special leave from annual balance", asy
   }
 });
 
+test("dashboard exposes shadow summaries while disabled policy does not require a grant", async () => {
+  const manager = {
+    id: "usr_manager",
+    name: "Manager",
+    email: "manager@cls.local",
+    role: "manager",
+    serviceStartDate: "2025-01-01"
+  };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: manager.id,
+    serviceStartDate: "2025-01-01",
+    leavePolicyYear: 2026,
+    leaveEntitlement: 0,
+    annualLeaveEntitlement: 0,
+    medicalLeaveEntitlement: 14,
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({
+    users: [manager, employee],
+    leaveRequests: [],
+    leavePolicySettings: [{
+      leaveType: "Compassionate Leave",
+      enforcementEnabled: false,
+      updatedAt: "2026-07-20T00:00:00.000Z",
+      updatedBy: null
+    }],
+    emails: []
+  });
+
+  const payload = __test.dashboard(db, employee);
+  assert.equal(payload.leavePolicySettings.find(
+    (setting) => setting.leaveType === "Compassionate Leave"
+  ).enforcementEnabled, false);
+  assert.equal(payload.leaveEntitlementSummaries[0].employeeId, employee.id);
+  assert.ok(payload.leaveEntitlementSummaries[0].medicalHospitalization);
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Compassionate Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-21",
+    reason: "Bereavement"
+  });
+  assert.equal(request.status, "pending");
+  assert.equal(request.entitlementId, undefined);
+});
+
 test("createLeaveRequest requires medical documents for hospitalization leave", async (t) => {
   const employee = {
     id: "usr_employee",
