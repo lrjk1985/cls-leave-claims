@@ -24,7 +24,7 @@ The V1 tables are:
 - `cls_audit_events`
 - `cls_sessions`
 
-The leave-entitlement upgrade is stored separately in `supabase/v2-leave-entitlements.sql`. It is additive and leaves every enforcement setting disabled. Existing databases must apply V1 first, then V2. Do not apply V2 directly to production until it has passed the staging sequence below.
+The leave-entitlement upgrade is stored separately in `supabase/v2-leave-entitlements.sql`. It is additive and leaves every enforcement setting disabled. New databases apply `supabase/v1-rollout.sql`, which includes the verified V2 schema. Existing V1 databases apply only `supabase/v2-leave-entitlements.sql`. Do not apply V2 directly to production until it has passed the staging sequence below.
 
 V2 adds:
 

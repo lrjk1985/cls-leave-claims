@@ -5,6 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const sqlPath = path.join(__dirname, "..", "supabase", "v2-leave-entitlements.sql");
+const cleanInstallSqlPath = path.join(__dirname, "..", "supabase", "v1-rollout.sql");
 
 test("leave entitlement rollout creates secured additive schema", () => {
   const sql = fs.readFileSync(sqlPath, "utf8");
@@ -22,6 +23,12 @@ test("leave entitlement rollout creates secured additive schema", () => {
   assert.match(sql, /security invoker/i);
   assert.match(sql, /new\.type = 'Maternity Leave'[\s\S]*new\.start_date <> v_entitlement_from/i);
   assert.match(sql, /Maternity Leave entitlement already has an active request/i);
+});
+
+test("clean-install rollout includes the verified entitlement schema", () => {
+  const cleanInstallSql = fs.readFileSync(cleanInstallSqlPath, "utf8");
+  const entitlementSql = fs.readFileSync(sqlPath, "utf8").trim();
+  assert.equal(cleanInstallSql.includes(entitlementSql), true);
 });
 
 const supabaseTestUrl = process.env.SUPABASE_TEST_URL;
