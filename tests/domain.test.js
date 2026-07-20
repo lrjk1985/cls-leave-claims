@@ -4,6 +4,7 @@ const {
   canReview,
   completedYearsOfService,
   generalClaimSummary,
+  isSpecialLeaveType,
   leaveDayBreakdown,
   leaveSummary,
   medicalClaimSummary,
@@ -12,6 +13,7 @@ const {
   normalizeLeaveDays,
   normalizeMoney,
   normalizeSignedLeaveDays,
+  requiresMedicalCertificate,
   serviceAdjustedAnnualLeave,
   workingDaysBetween
 } = require("../src/domain");
@@ -88,6 +90,46 @@ test("leaveSummary keeps entitlement separate from manual balance adjustments", 
   assert.equal(summary.entitlement, 14);
   assert.equal(summary.adjustments, -3);
   assert.equal(summary.available, 11);
+});
+
+test("leaveSummary excludes separately tracked special leave from annual totals", () => {
+  const user = {
+    id: "u1",
+    leaveEntitlement: 14,
+    annualLeaveEntitlement: 14,
+    leavePolicyYear: 2026
+  };
+  const specialTypes = [
+    "Hospitalization Leave",
+    "Compassionate Leave",
+    "Paternity Leave",
+    "Maternity Leave",
+    "Childcare Leave",
+    "National Service Leave"
+  ];
+  const summary = leaveSummary(user, [
+    { employeeId: "u1", leaveYear: 2026, type: "Annual Leave", status: "approved", days: 2 },
+    { employeeId: "u1", leaveYear: 2026, type: "Urgent Leave", status: "pending", days: 1 },
+    ...specialTypes.map((type) => ({
+      employeeId: "u1",
+      leaveYear: 2026,
+      type,
+      status: "approved",
+      days: 1
+    }))
+  ]);
+
+  assert.equal(summary.approved, 2);
+  assert.equal(summary.pending, 1);
+  assert.equal(summary.available, 12);
+  specialTypes.forEach((type) => assert.equal(isSpecialLeaveType(type), true));
+});
+
+test("medical documents are required for outpatient and hospitalization leave only", () => {
+  assert.equal(requiresMedicalCertificate("Medical Leave"), true);
+  assert.equal(requiresMedicalCertificate("Hospitalization Leave"), true);
+  assert.equal(requiresMedicalCertificate("Compassionate Leave"), false);
+  assert.equal(requiresMedicalCertificate("Annual Leave"), false);
 });
 
 test("medicalLeaveSummary tracks medical leave separately from annual leave", () => {

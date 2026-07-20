@@ -788,8 +788,8 @@ test("createLeaveRequest lets unlimited annual leave exceed annual balance", asy
 
   const request = await __test.createLeaveRequest(db, employee, {
     type: "Annual Leave",
-    startDate: "2026-06-02",
-    endDate: "2026-06-03",
+    startDate: "2026-07-21",
+    endDate: "2026-07-22",
     reason: "Owner leave"
   });
 
@@ -836,6 +836,87 @@ test("createLeaveRequest keeps medical leave capped for unlimited annual leave u
     }),
     /only 0 days are available/
   );
+});
+
+test("createLeaveRequest does not deduct special leave from annual balance", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    leaveEntitlement: 0,
+    annualLeaveEntitlement: 0,
+    medicalLeaveEntitlement: 0
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    emails: []
+  };
+  const specialTypes = [
+    "Compassionate Leave",
+    "Paternity Leave",
+    "Maternity Leave",
+    "Childcare Leave",
+    "National Service Leave"
+  ];
+
+  for (const type of specialTypes) {
+    const request = await __test.createLeaveRequest(db, employee, {
+      type,
+      startDate: "2026-07-21",
+      endDate: "2026-07-21",
+      reason: "Eligibility documents available"
+    });
+    assert.equal(request.type, type);
+    assert.equal(request.days, 1);
+    assert.equal(request.status, "pending");
+  }
+});
+
+test("createLeaveRequest requires medical documents for hospitalization leave", async (t) => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    leaveEntitlement: 0,
+    annualLeaveEntitlement: 0,
+    medicalLeaveEntitlement: 0
+  };
+  const db = {
+    users: [employee],
+    leaveRequests: [],
+    emails: []
+  };
+  const body = {
+    type: "Hospitalization Leave",
+    startDate: "2026-07-21",
+    endDate: "2026-07-21"
+  };
+
+  await assert.rejects(
+    () => __test.createLeaveRequest(db, employee, body),
+    /required for Hospitalization Leave/
+  );
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    ...body,
+    medicalCertificate: {
+      name: "hospitalization-letter.pdf",
+      type: "application/pdf",
+      buffer: Buffer.from("%PDF-1.4\nhospitalization-letter\n", "utf8")
+    }
+  });
+  t.after(() => fs.rm(path.join(__dirname, "..", "data", "uploads", request.medicalCertificate.storedName), { force: true }));
+
+  assert.equal(request.type, "Hospitalization Leave");
+  assert.equal(request.days, 1);
+  assert.equal(request.medicalCertificate.originalName, "hospitalization-letter.pdf");
 });
 
 test("createClaim routes claims to the separate claims approver", async () => {

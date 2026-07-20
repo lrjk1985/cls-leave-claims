@@ -50,3 +50,17 @@ test("medical claim export controls align across fields and actions", () => {
   assert.match(cssSource, /\.export-controls\s*\{[\s\S]*?align-items:\s*end;/);
   assert.match(cssSource, /\.export-actions\s*\{[\s\S]*?align-self:\s*end;/);
 });
+
+test("leave form includes separately tracked HR leave categories", () => {
+  [
+    "Hospitalization Leave",
+    "Compassionate Leave",
+    "Paternity Leave",
+    "Maternity Leave",
+    "Childcare Leave",
+    "National Service Leave"
+  ].forEach((type) => assert.match(appSource, new RegExp(`<option>${type}</option>`)));
+  assert.match(appSource, /Eligibility is reviewed during approval\./);
+  assert.match(appSource, /requiresMedicalCertificate\(body\.type\)/);
+  assert.match(appSource, /requiresMedicalCertificate\(typeField\.value\)/);
+});

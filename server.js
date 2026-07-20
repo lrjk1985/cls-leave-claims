@@ -17,6 +17,7 @@ const {
   formatIsoDate,
   generalClaimSummary,
   isMedicalLeaveType,
+  isSpecialLeaveType,
   leaveDayBreakdown,
   leaveSummary,
   medicalClaimSummary,
@@ -25,6 +26,7 @@ const {
   normalizeLeaveDays,
   normalizeSignedLeaveDays,
   normalizeMoney,
+  requiresMedicalCertificate,
   workingDaysBetween
 } = require("./src/domain");
 const {
@@ -2976,6 +2978,8 @@ async function createLeaveRequest(db, user, body) {
 
   const type = String(body.type || "Annual Leave").trim();
   const isMedicalLeave = isMedicalLeaveType(type);
+  const isSpecialLeave = isSpecialLeaveType(type);
+  const needsMedicalCertificate = requiresMedicalCertificate(type);
   const reason = String(body.reason || "").trim();
   const startDate = String(body.startDate || "");
   const endDate = String(body.endDate || "");
@@ -2996,14 +3000,14 @@ async function createLeaveRequest(db, user, body) {
     if (days > summary.unreserved) {
       throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
     }
-    if (!body.medicalCertificateUpload && !body.medicalCertificate) {
-      throw new Error("A Medical Certificate attachment is required for Medical Leave.");
-    }
-  } else {
+  } else if (!isSpecialLeave) {
     const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
     if (!user.unlimitedAnnualLeave && days > summary.available) {
       throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
     }
+  }
+  if (needsMedicalCertificate && !body.medicalCertificateUpload && !body.medicalCertificate) {
+    throw new Error(`A Medical Certificate attachment is required for ${type}.`);
   }
 
   const createdAt = nowIso();
@@ -3027,7 +3031,7 @@ async function createLeaveRequest(db, user, body) {
     decidedBy: null
   };
 
-  if (isMedicalLeave) {
+  if (needsMedicalCertificate) {
     request.medicalCertificate = body.medicalCertificateUpload
       ? await medicalCertificateFromSupabaseUpload(user, body.medicalCertificateUpload)
       : await saveMedicalCertificateAttachment(request.id, body.medicalCertificate);
@@ -3039,8 +3043,8 @@ async function createLeaveRequest(db, user, body) {
     type: "leave_submitted",
     subject: `Leave request pending approval: ${user.name}`,
     body: [
-      `${user.name} has applied for ${days} deductible working day(s) of ${type} from ${startDate} to ${endDate}.`,
-      isMedicalLeave ? "A Medical Certificate has been uploaded in CLS Leave & Claims for your review." : "",
+      `${user.name} has applied for ${days} working day(s) of ${type} from ${startDate} to ${endDate}.`,
+      needsMedicalCertificate ? "A Medical Certificate has been uploaded in CLS Leave & Claims for your review." : "",
       "Please review the leave request in CLS Leave & Claims.",
       `Use the attached calendar file (${user.name} on leave) to add this leave period to your calendar.`
     ].filter(Boolean).join("\n\n"),

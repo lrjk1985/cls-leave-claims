@@ -925,6 +925,11 @@ function isMedicalLeaveType(type) {
   return String(type || "").trim().toLowerCase() === "medical leave";
 }
 
+function requiresMedicalCertificate(type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  return normalizedType === "medical leave" || normalizedType === "hospitalization leave";
+}
+
 function newClaimSubmissionId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1039,7 +1044,7 @@ async function uploadMedicalCertificateToSignedUrl(upload, file) {
 }
 
 async function leaveFormPayload(form, body) {
-  if (!isMedicalLeaveType(body.type)) {
+  if (!requiresMedicalCertificate(body.type)) {
     const leaveBody = { ...body };
     delete leaveBody.medicalCertificate;
     return { body: JSON.stringify(leaveBody) };
@@ -1047,7 +1052,7 @@ async function leaveFormPayload(form, body) {
 
   const file = form.querySelector("input[type='file'][name='medicalCertificate']")?.files?.[0];
   if (!file) {
-    throw new Error("Please upload a Medical Certificate for Medical Leave.");
+    throw new Error(`Please upload a Medical Certificate for ${body.type}.`);
   }
   assertMedicalCertificateFile(file);
 
@@ -1884,12 +1889,19 @@ function renderLeave() {
               <select id="leave-type" name="type">
                 <option>Annual Leave</option>
                 <option>Medical Leave</option>
+                <option>Hospitalization Leave</option>
+                <option>Compassionate Leave</option>
+                <option>Paternity Leave</option>
+                <option>Maternity Leave</option>
+                <option>Childcare Leave</option>
+                <option>National Service Leave</option>
                 <option>Urgent Leave</option>
                 <option>Unpaid Leave</option>
               </select>
+              <div class="field-hint">Special leave is tracked separately from annual leave. Eligibility is reviewed during approval.</div>
             </div>
             <div class="field full" data-medical-certificate-field hidden>
-              <label for="leave-medical-certificate">Medical Certificate</label>
+              <label for="leave-medical-certificate">Medical Certificate / Hospitalization Document</label>
               <input id="leave-medical-certificate" name="medicalCertificate" type="file" accept="${RECEIPT_ACCEPT}" disabled>
               <div class="field-hint">${RECEIPT_HELP_TEXT}</div>
             </div>
@@ -2720,7 +2732,7 @@ function updateMedicalCertificateField(form) {
   const fileInput = form.querySelector("input[name='medicalCertificate']");
   if (!typeField || !wrapper || !fileInput) return;
 
-  const required = isMedicalLeaveType(typeField.value);
+  const required = requiresMedicalCertificate(typeField.value);
   wrapper.hidden = !required;
   fileInput.required = required;
   fileInput.disabled = !required;

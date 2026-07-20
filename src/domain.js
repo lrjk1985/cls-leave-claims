@@ -2,6 +2,14 @@ const VALID_DECISIONS = new Set(["approved", "rejected"]);
 const MAX_ANNUAL_LEAVE_DAYS = 18;
 const ANNUAL_BIRTHDAY_LEAVE_DAYS = 1;
 const ANNUAL_MEDICAL_LEAVE_DAYS = 14;
+const SPECIAL_LEAVE_TYPES = new Set([
+  "hospitalization leave",
+  "compassionate leave",
+  "paternity leave",
+  "maternity leave",
+  "childcare leave",
+  "national service leave"
+]);
 
 function assertIsoDate(value, fieldName) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -176,6 +184,15 @@ function isMedicalLeaveType(type) {
   return String(type || "").trim().toLowerCase() === "medical leave";
 }
 
+function isSpecialLeaveType(type) {
+  return SPECIAL_LEAVE_TYPES.has(String(type || "").trim().toLowerCase());
+}
+
+function requiresMedicalCertificate(type) {
+  const normalizedType = String(type || "").trim().toLowerCase();
+  return normalizedType === "medical leave" || normalizedType === "hospitalization leave";
+}
+
 function leaveSummary(user, leaveRequests, options = {}) {
   const year = Number(options.year || user.leavePolicyYear || currentLeaveYear());
   const adjustments = normalizeSignedLeaveDays(options.adjustments ?? 0, "Leave adjustments");
@@ -192,7 +209,8 @@ function leaveSummary(user, leaveRequests, options = {}) {
     (request) =>
       request.employeeId === user.id &&
       leaveRequestYear(request) === year &&
-      !isMedicalLeaveType(request.type)
+      !isMedicalLeaveType(request.type) &&
+      !isSpecialLeaveType(request.type)
   );
   const approved = ownRequests
     .filter((request) => request.status === "approved")
@@ -359,6 +377,7 @@ module.exports = {
   formatIsoDate,
   generalClaimSummary,
   isMedicalLeaveType,
+  isSpecialLeaveType,
   leaveDayBreakdown,
   leaveRequestYear,
   leaveSummary,
@@ -369,6 +388,7 @@ module.exports = {
   normalizeLeaveDays,
   normalizeSignedLeaveDays,
   normalizeMoney,
+  requiresMedicalCertificate,
   serviceAdjustedAnnualLeave,
   workingDaysBetween
 };
