@@ -2,14 +2,13 @@ const VALID_DECISIONS = new Set(["approved", "rejected"]);
 const MAX_ANNUAL_LEAVE_DAYS = 18;
 const ANNUAL_BIRTHDAY_LEAVE_DAYS = 1;
 const ANNUAL_MEDICAL_LEAVE_DAYS = 14;
-const SPECIAL_LEAVE_TYPES = new Set([
-  "hospitalization leave",
-  "compassionate leave",
-  "paternity leave",
-  "maternity leave",
-  "childcare leave",
-  "national service leave"
-]);
+const {
+  COUNTING_METHODS,
+  isMedicalLeaveType,
+  isSpecialLeaveType,
+  LEAVE_TYPES,
+  requiresSupportingDocument
+} = require("./leaveEntitlements");
 
 function assertIsoDate(value, fieldName) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -178,14 +177,6 @@ function serviceAdjustedAnnualLeave(user, asOfDate = new Date()) {
 
 function leaveRequestYear(request) {
   return Number(request.leaveYear || yearFromIsoDate(request.startDate, "Leave start date"));
-}
-
-function isMedicalLeaveType(type) {
-  return String(type || "").trim().toLowerCase() === "medical leave";
-}
-
-function isSpecialLeaveType(type) {
-  return SPECIAL_LEAVE_TYPES.has(String(type || "").trim().toLowerCase());
 }
 
 function requiresMedicalCertificate(type) {
@@ -373,11 +364,13 @@ module.exports = {
   canSeeEmployee,
   completedYearsOfService,
   currentLeaveYear,
+  COUNTING_METHODS,
   decisionLabel,
   formatIsoDate,
   generalClaimSummary,
   isMedicalLeaveType,
   isSpecialLeaveType,
+  LEAVE_TYPES,
   leaveDayBreakdown,
   leaveRequestYear,
   leaveSummary,
@@ -389,6 +382,7 @@ module.exports = {
   normalizeSignedLeaveDays,
   normalizeMoney,
   requiresMedicalCertificate,
+  requiresSupportingDocument,
   serviceAdjustedAnnualLeave,
   workingDaysBetween
 };
