@@ -58,14 +58,30 @@ function normalizeRecord(record) {
   };
 }
 
+function observedHolidayBaseName(holiday) {
+  return String(holiday || "")
+    .replace(/\s*\(observed\)\s*$/i, "")
+    .trim()
+    .toLowerCase();
+}
+
 function withObservedRestDayHolidays(holidays) {
+  const officialHolidays = holidays.filter((holiday) => !holiday.observed);
   const byDate = new Map();
-  for (const holiday of holidays) {
+  for (const holiday of officialHolidays) {
     byDate.set(holiday.date, holiday);
   }
 
-  for (const holiday of holidays) {
+  for (const holiday of officialHolidays) {
     if (!isSundayIso(holiday.date)) continue;
+
+    const officialObservedDate = officialHolidays.find((candidate) =>
+      candidate.date > holiday.date &&
+      candidate.date <= addDaysToIso(holiday.date, 7) &&
+      /\(observed\)\s*$/i.test(candidate.holiday) &&
+      observedHolidayBaseName(candidate.holiday) === observedHolidayBaseName(holiday.holiday)
+    );
+    if (officialObservedDate) continue;
 
     let observedDate = addDaysToIso(holiday.date, 1);
     while (isWeekendIso(observedDate) || byDate.has(observedDate)) {
@@ -94,7 +110,9 @@ async function readCache(cachePath = DEFAULT_CACHE_PATH) {
       source: cache.source || "MOM Singapore Public Holidays via data.gov.sg",
       syncedAt: cache.syncedAt || null,
       years: Array.isArray(cache.years) ? cache.years : null,
-      holidays: Array.isArray(cache.holidays) ? cache.holidays : []
+      holidays: Array.isArray(cache.holidays)
+        ? withObservedRestDayHolidays(cache.holidays)
+        : []
     };
   } catch (error) {
     if (error.code === "ENOENT") {

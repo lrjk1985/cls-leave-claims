@@ -48,3 +48,36 @@ test("withObservedRestDayHolidays skips occupied weekdays", () => {
 
   assert.equal(holidays.some((holiday) => holiday.date === "2027-02-09" && holiday.observed), true);
 });
+
+test("withObservedRestDayHolidays does not duplicate an official observed holiday", () => {
+  const holidays = withObservedRestDayHolidays([
+    {
+      date: "2026-08-09",
+      day: "Sunday",
+      holiday: "National Day",
+      year: 2026,
+      observed: false
+    },
+    {
+      date: "2026-08-10",
+      day: "Monday",
+      holiday: "National Day (Observed)",
+      year: 2026,
+      observed: false
+    },
+    {
+      date: "2026-08-11",
+      day: "",
+      holiday: "National Day (observed)",
+      year: 2026,
+      observed: true,
+      observedFor: "2026-08-09"
+    }
+  ]);
+
+  assert.deepEqual(
+    holidays.filter((holiday) => holiday.date >= "2026-08-09" && holiday.date <= "2026-08-11")
+      .map((holiday) => holiday.date),
+    ["2026-08-09", "2026-08-10"]
+  );
+});
