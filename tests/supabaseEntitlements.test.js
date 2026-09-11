@@ -53,6 +53,7 @@ test("OIL and half-day rollout creates a secured additive schema", () => {
   assert.match(sql, /day_portion in \('full', 'morning', 'afternoon'\)/i);
   assert.match(sql, /create table if not exists public\.cls_off_in_lieu_awards/i);
   assert.match(sql, /create table if not exists public\.cls_off_in_lieu_allocations/i);
+  assert.match(sql, /expires_on = case[\s\S]*make_date[\s\S]*interval '1 year'/i);
   assert.match(sql, /enable row level security/i);
   assert.match(sql, /revoke all[\s\S]*from anon, authenticated/i);
   assert.match(sql, /grant select, insert, update, delete[\s\S]*to service_role/i);

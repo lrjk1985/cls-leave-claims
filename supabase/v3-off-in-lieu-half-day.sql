@@ -70,7 +70,13 @@ create table if not exists public.cls_off_in_lieu_awards (
   constraint cls_off_in_lieu_awards_days_check
     check (days > 0 and days * 2 = trunc(days * 2)),
   constraint cls_off_in_lieu_awards_expiry_check
-    check (expires_on > award_date),
+    check (
+      expires_on = case
+        when extract(month from award_date) = 2 and extract(day from award_date) = 29
+          then make_date(extract(year from award_date)::integer + 1, 3, 1)
+        else (award_date + interval '1 year')::date
+      end
+    ),
   constraint cls_off_in_lieu_awards_reason_check
     check (btrim(reason) <> ''),
   constraint cls_off_in_lieu_awards_revocation_check
