@@ -325,6 +325,12 @@ function statusLabel(status) {
   return "Pending";
 }
 
+function leavePortionLabel(dayPortion) {
+  if (dayPortion === "morning") return "Morning Half";
+  if (dayPortion === "afternoon") return "Afternoon Half";
+  return "Full Day";
+}
+
 function emailDeliveryText(email) {
   if (email.delivered) return `Delivered${email.deliveredAt ? ` ${dateTimeText(email.deliveredAt)}` : ""}`;
   if (email.deliveryError) return `Failed: ${email.deliveryError}`;
@@ -1520,7 +1526,7 @@ function employeeRecentRequests() {
       title: item.startDate === item.endDate
         ? dateText(item.startDate)
         : `${dateText(item.startDate)} to ${dateText(item.endDate)}`,
-      meta: `${item.days} working day${Number(item.days) === 1 ? "" : "s"}${item.reason ? ` - ${item.reason}` : ""}`
+      meta: `${item.days} working day${Number(item.days) === 1 ? "" : "s"} - ${leavePortionLabel(item.dayPortion)}${item.reason ? ` - ${item.reason}` : ""}`
     }));
   const claimItems = state.dashboard.medicalClaims
     .filter((item) => item.employeeId === userId)
@@ -1959,6 +1965,7 @@ function renderApprovalPreviewCards(kind, items) {
                 <span>${dateText(item.startDate)}${item.startDate === item.endDate ? "" : ` to ${dateText(item.endDate)}`}</span>
                 <span>${item.days} day${Number(item.days) === 1 ? "" : "s"}</span>
                 <span>${escapeHtml(item.type)}</span>
+                <span>${escapeHtml(leavePortionLabel(item.dayPortion))}</span>
               </div>
               ${item.reason ? `<p class="muted">${escapeHtml(item.reason)}</p>` : ""}
               ${excludedDatesText(item)}
@@ -2528,6 +2535,16 @@ function renderLeaveApprovalContext(item) {
   const medicalType = isMedicalLeaveType(item.type);
   const hospitalizationType = item.type === "Hospitalization Leave";
   const nationalServiceType = isNationalServiceLeave(item.type);
+  const offInLieuType = item.type === "Off-in-Lieu Leave";
+  const oilAllocations = offInLieuType
+    ? (bundle.offInLieu?.allocations || []).filter(
+      (allocation) => allocation.leaveRequestId === item.id
+    )
+    : [];
+  const oilAwards = oilAllocations.map((allocation) => ({
+    allocation,
+    award: (bundle.offInLieu?.awards || []).find((award) => award.id === allocation.awardId)
+  })).filter((entry) => entry.award);
   const pool = medicalType
     ? bundle.medicalHospitalization?.outpatient
     : hospitalizationType
@@ -2536,6 +2553,8 @@ function renderLeaveApprovalContext(item) {
   const summary = entitlement?.summary || pool;
   const balanceAfterApproval = nationalServiceType
     ? "Uncapped"
+    : offInLieuType
+      ? `${displayNumber(bundle.offInLieu?.unreserved ?? 0)} days`
     : summary
       ? `${displayNumber(Number(summary.available || 0) - Number(item.days || 0))} days`
       : "Not capped by this policy";
@@ -2550,6 +2569,8 @@ function renderLeaveApprovalContext(item) {
       ? `Calendar year ${bundle.medicalHospitalization?.year || item.leaveYear}`
       : nationalServiceType
         ? `${dateText(item.startDate)} to ${dateText(item.endDate)}`
+        : offInLieuType
+          ? oilAwards.length ? "Funded by awarded credits" : "Allocation missing"
         : "Not linked";
   const documentAttached = Boolean(item.medicalCertificate?.storedName || item.supportingDocument?.storedName);
   const documentRequired = requiresMedicalCertificate(item.type) ||
@@ -2561,6 +2582,14 @@ function renderLeaveApprovalContext(item) {
       <div><dt>Linked period</dt><dd>${escapeHtml(linkedPeriod)}</dd></div>
       <div><dt>Supporting document</dt><dd>${documentAttached ? "Attached" : documentRequired ? "Missing" : "Not required"}</dd></div>
       <div><dt>Balance after approval</dt><dd>${escapeHtml(balanceAfterApproval)}</dd></div>
+      ${offInLieuType ? `
+        <div><dt>OIL funding</dt><dd>${oilAwards.length
+          ? oilAwards.map(({ allocation }) => `${displayNumber(allocation.days)} day${Number(allocation.days) === 1 ? "" : "s"}`).join(", ")
+          : "Missing"}</dd></div>
+        <div><dt>Funding expiry</dt><dd>${oilAwards.length
+          ? [...new Set(oilAwards.map(({ award }) => dateText(award.expiresOn)))].join(", ")
+          : "Missing"}</dd></div>
+      ` : ""}
     </dl>
   `;
 }
@@ -2590,6 +2619,7 @@ function renderLeaveTable(items, approvalsMode) {
               <td data-label="Dates">
                 ${dateText(item.startDate)}<br>
                 <span class="muted">${dateText(item.endDate)}</span>
+                <div class="muted">${escapeHtml(leavePortionLabel(item.dayPortion))}</div>
                 ${excludedDatesText(item)}
               </td>
               <td data-label="Deducted Days">${item.days}</td>

@@ -1875,6 +1875,12 @@ function addDays(date, days) {
   return next.toISOString().slice(0, 10);
 }
 
+function leavePortionLabel(dayPortion) {
+  if (dayPortion === DAY_PORTIONS.MORNING) return "Morning Half";
+  if (dayPortion === DAY_PORTIONS.AFTERNOON) return "Afternoon Half";
+  return "Full Day";
+}
+
 function makeLeaveCalendarAttachment({ request, employee, reviewer, status = "TENTATIVE" }) {
   const calendarStatus = status === "CANCELLED"
     ? "CANCELLED"
@@ -1886,6 +1892,7 @@ function makeLeaveCalendarAttachment({ request, employee, reviewer, status = "TE
       ? `${employee.name}'s leave from ${request.startDate} to ${request.endDate} has been cancelled.`
       : `${employee.name} is on leave from ${request.startDate} to ${request.endDate}.`,
     `${request.days} deductible working day(s).`,
+    `Duration: ${leavePortionLabel(request.dayPortion)}.`,
     request.reason ? `Reason: ${request.reason}` : "",
     reviewer ? `Reviewed by: ${reviewer.name}` : ""
   ]
@@ -3172,6 +3179,9 @@ function publicOffInLieuSummary(db, viewer, employee, asOfDate = formatIsoDate(n
   });
   return {
     ...summary,
+    allocations: (db.offInLieuAllocations || []).filter((allocation) =>
+      summary.awards.some((award) => award.id === allocation.awardId)
+    ),
     awards: summary.awards.map((award) => {
       if (canAdmin(viewer)) return award;
       const { revokedAt, revokedBy, revocationReason, ...publicAward } = award;
@@ -4175,7 +4185,7 @@ async function createLeaveRequest(db, user, body) {
     type: "leave_submitted",
     subject: `Leave request pending approval: ${user.name}`,
     body: [
-      `${user.name} has applied for ${days} working day(s) of ${type} from ${startDate} to ${endDate}.`,
+      `${user.name} has applied for ${days} working day(s) of ${type} from ${startDate} to ${endDate} (${leavePortionLabel(dayPortion)}).`,
       needsMedicalCertificate ? "A Medical Certificate has been uploaded in CLS Leave & Claims for your review." : "",
       needsSupportingDocument ? "An Official Call-Up Notice has been uploaded for your review." : "",
       "Please review the leave request in CLS Leave & Claims.",
@@ -4243,7 +4253,7 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
     type: "leave_decided",
     subject: `Leave request ${decisionLabel(request.status).toLowerCase()}`,
     body: [
-      `Your leave request for ${request.days} working day(s) from ${request.startDate} to ${request.endDate} was ${decisionLabel(request.status).toLowerCase()} by ${reviewer.name}.`,
+      `Your ${leavePortionLabel(request.dayPortion)} leave request for ${request.days} working day(s) from ${request.startDate} to ${request.endDate} was ${decisionLabel(request.status).toLowerCase()} by ${reviewer.name}.`,
       request.status === "approved"
         ? "Use the attached calendar file to add your approved leave to your calendar."
         : "No calendar file is attached because this leave request was not approved."
@@ -4285,7 +4295,7 @@ async function cancelLeaveRequest(db, user, requestId, body = {}, options = {}) 
 
   const manager = getUser(db, request.managerId);
   const managerBody = [
-    `${user.name} has cancelled a pending leave request from ${request.startDate} to ${request.endDate}.`,
+    `${user.name} has cancelled a pending ${leavePortionLabel(request.dayPortion)} leave request from ${request.startDate} to ${request.endDate}.`,
     "No approval action is needed. Use the attached calendar file to remove the tentative leave period from your calendar."
   ].join("\n\n");
 
@@ -4826,9 +4836,11 @@ async function handleApi(req, res, pathname) {
       affectedUserId: user.id,
       relatedType: "leave",
       relatedId: request.id,
-      summary: `${user.name} submitted ${request.type} from ${request.startDate} to ${request.endDate} (${request.days} working day${request.days === 1 ? "" : "s"}).`,
+      summary: `${user.name} submitted ${request.type} from ${request.startDate} to ${request.endDate} (${request.days} working day${request.days === 1 ? "" : "s"}, ${leavePortionLabel(request.dayPortion)}).`,
       metadata: {
         type: request.type,
+        dayPortion: request.dayPortion,
+        portion: leavePortionLabel(request.dayPortion),
         startDate: request.startDate,
         endDate: request.endDate,
         days: request.days,
@@ -4855,9 +4867,11 @@ async function handleApi(req, res, pathname) {
       affectedUserId: user.id,
       relatedType: "leave",
       relatedId: request.id,
-      summary: `${user.name} cancelled ${previousStatus} leave from ${request.startDate} to ${request.endDate}.`,
+      summary: `${user.name} cancelled ${previousStatus} ${leavePortionLabel(request.dayPortion)} leave from ${request.startDate} to ${request.endDate}.`,
       metadata: {
         previousStatus,
+        dayPortion: request.dayPortion,
+        portion: leavePortionLabel(request.dayPortion),
         cancellationNote: request.cancellationNote,
         startDate: request.startDate,
         endDate: request.endDate,
@@ -4882,9 +4896,11 @@ async function handleApi(req, res, pathname) {
       affectedUserId: request.employeeId,
       relatedType: "leave",
       relatedId: request.id,
-      summary: `${user.name} ${request.status === "approved" ? "approved" : "did not approve"} leave for ${auditUserName(db, request.employeeId)} from ${request.startDate} to ${request.endDate}.`,
+      summary: `${user.name} ${request.status === "approved" ? "approved" : "did not approve"} ${leavePortionLabel(request.dayPortion)} leave for ${auditUserName(db, request.employeeId)} from ${request.startDate} to ${request.endDate}.`,
       metadata: {
         status: request.status,
+        dayPortion: request.dayPortion,
+        portion: leavePortionLabel(request.dayPortion),
         decisionNote: request.decisionNote
       }
     });
@@ -5095,6 +5111,7 @@ module.exports = {
     ensureAnnualSpecialLeaveEntitlements,
     limitSessionsForUser,
     medicalClaimsExport,
+    makeLeaveCalendarAttachment,
     normalizeDb,
     multipartBoundary,
     parseMultipartBuffer,

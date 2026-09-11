@@ -161,6 +161,9 @@ test("approvers see entitlement context without changed decision controls", () =
   assert.match(appSource, /Supporting document/);
   assert.match(appSource, /Balance after approval/);
   assert.match(appSource, /renderDecisionControls\("leave", item\)/);
+  assert.match(appSource, /OIL funding/);
+  assert.match(appSource, /Funding expiry/);
+  assert.match(appSource, /leavePortionLabel/);
 });
 
 test("employee entitlement summaries stay compact on mobile", () => {

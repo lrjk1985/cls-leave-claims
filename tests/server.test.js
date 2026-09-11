@@ -980,6 +980,35 @@ test("OIL requests allocate earliest-expiring valid awards and expose a dashboar
   assert.equal(payload.offInLieuSummary.nextExpiry, "2027-09-01");
 });
 
+test("half-day wording is included in email and calendar context", async () => {
+  const manager = { id: "usr_manager", name: "Manager", email: "manager@cls.local", role: "manager" };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    email: "employee@cls.local",
+    role: "employee",
+    active: true,
+    managerId: manager.id,
+    leavePolicyYear: 2026,
+    annualLeaveEntitlement: 14,
+    leaveEntitlement: 14,
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({ users: [manager, employee], emails: [] });
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Annual Leave",
+    startDate: "2026-09-15",
+    endDate: "2026-09-15",
+    dayPortion: "morning"
+  });
+
+  assert.match(db.emails[0].body, /Morning Half/);
+  const calendar = __test.makeLeaveCalendarAttachment({ request, employee });
+  const calendarText = Buffer.from(calendar.content, "base64").toString("utf8");
+  assert.match(calendarText, /Morning Half/);
+  assert.match(calendarText, /0\.5 deductible working day/);
+});
+
 test("createLeaveRequest keeps medical leave capped for unlimited annual leave users", async () => {
   const employee = {
     id: "usr_employee",
