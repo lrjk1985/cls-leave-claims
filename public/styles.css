@@ -1663,6 +1663,64 @@ tr:last-child td {
   border-top: 1px solid var(--line);
 }
 
+.oil-manager {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.oil-manager-header,
+.oil-award-heading,
+.oil-revoke-form {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.oil-manager h3,
+.oil-award-row p {
+  margin: 0;
+}
+
+.oil-award-form {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.6fr) minmax(160px, 0.8fr) minmax(220px, 1.6fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.oil-award-form .full {
+  grid-column: 1 / -1;
+}
+
+.oil-award-list {
+  display: grid;
+  gap: 10px;
+}
+
+.oil-award-row {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.oil-award-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oil-revoke-form .field {
+  flex: 1 1 240px;
+}
+
 .entitlement-manager-header,
 .entitlement-medical-summary,
 .entitlement-schedule-form,
@@ -1786,6 +1844,14 @@ tr:last-child td {
 @media (max-width: 640px) {
   .duration-control {
     grid-template-columns: 1fr;
+  }
+
+  .oil-award-form {
+    grid-template-columns: 1fr;
+  }
+
+  .oil-award-form .full {
+    grid-column: auto;
   }
 
   .entitlement-grid {

@@ -140,6 +140,20 @@ test("leave form includes OIL and accessible half-day duration controls", () => 
   assert.match(cssSource, /\.duration-control\s*\{/);
 });
 
+test("admin directory includes inline OIL award and revoke management", () => {
+  assert.match(appSource, /Manage Off-in-Lieu/);
+  assert.match(appSource, /Award Off-in-Lieu/);
+  assert.match(appSource, /Award Date/);
+  assert.match(appSource, /data-oil-expiry/);
+  assert.match(appSource, /Usable through/);
+  assert.match(appSource, /Available/);
+  assert.match(appSource, /Pending/);
+  assert.match(appSource, /Next expiry/);
+  assert.match(appSource, /off-in-lieu-awards\/\$\{form\.dataset\.awardId\}\/revoke/);
+  assert.match(appSource, /aria-controls="employee-oil-/);
+  assert.match(cssSource, /\.oil-manager\s*\{/);
+});
+
 test("approvers see entitlement context without changed decision controls", () => {
   assert.match(appSource, /function renderLeaveApprovalContext/);
   assert.match(appSource, /Eligibility verified/);

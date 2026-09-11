@@ -51,6 +51,7 @@ const state = {
     employeeId: null
   },
   entitlementEmployeeId: null,
+  offInLieuEmployeeId: null,
   sidebarQuote: null
 };
 
@@ -294,6 +295,12 @@ function todayIso() {
     }).formatToParts(new Date()).map((part) => [part.type, part.value])
   );
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function addIsoDays(value, days) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function currentYearText() {
@@ -981,6 +988,8 @@ function formSubmittingLabel(formType) {
     "entitlement-adjustment": "Applying Adjustment...",
     "leave-entitlement": "Creating Grant...",
     "work-schedule": "Saving Schedule...",
+    "oil-award": "Awarding...",
+    "oil-revoke": "Revoking...",
     password: "Changing Password..."
   }[formType] || "Submitting...";
 }
@@ -2921,6 +2930,110 @@ function renderEntitlementManager(employee) {
   `;
 }
 
+function offInLieuExpiryDate(awardDate) {
+  if (!awardDate) return "";
+  const date = new Date(`${awardDate}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setUTCFullYear(date.getUTCFullYear() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function updateOilExpiryGuidance(form) {
+  const awardDate = form.querySelector("input[name='awardDate']")?.value || "";
+  const expiry = offInLieuExpiryDate(awardDate);
+  const status = form.querySelector("[data-oil-expiry]");
+  if (!status) return;
+  status.textContent = expiry
+    ? `Expires ${dateText(expiry)}. Usable through ${dateText(addIsoDays(expiry, -1))}.`
+    : "Choose an Award Date to preview the one-year expiry.";
+}
+
+function renderOffInLieuAward(award) {
+  const today = todayIso();
+  const status = award.revokedAt
+    ? "Revoked"
+    : today >= award.expiresOn
+      ? "Expired"
+      : award.awardDate > today
+        ? "Scheduled"
+        : "Active";
+  return `
+    <article class="oil-award-row">
+      <div class="oil-award-heading">
+        <div><strong>${displayNumber(award.days)} day${Number(award.days) === 1 ? "" : "s"}</strong><span class="status ${status.toLowerCase()}">${status}</span></div>
+        <span class="muted">Awarded by ${escapeHtml(employeeName(award.awardedBy))}</span>
+      </div>
+      ${renderEmployeeEntitlementFacts([
+        ["Available", displayNumber(award.available)],
+        ["Pending", displayNumber(award.pending)],
+        ["Award Date", dateText(award.awardDate)],
+        ["Expiry", dateText(award.expiresOn)]
+      ])}
+      <p class="muted">Usable through ${dateText(addIsoDays(award.expiresOn, -1))}. ${escapeHtml(award.reason)}</p>
+      ${award.revokedAt ? `
+        <p class="field-hint">Revoked ${dateTimeText(award.revokedAt)} by ${escapeHtml(employeeName(award.revokedBy))}: ${escapeHtml(award.revocationReason)}</p>
+      ` : `
+        <form class="oil-revoke-form" data-form="oil-revoke" data-award-id="${escapeHtml(award.id)}">
+          <div class="field">
+            <label>Revocation Reason</label>
+            <input name="reason" required>
+          </div>
+          <button class="button small" type="submit">Revoke</button>
+        </form>
+      `}
+    </article>
+  `;
+}
+
+function renderOffInLieuManager(employee) {
+  const summary = employeeEntitlementBundle(employee.id).offInLieu || {
+    available: 0,
+    pending: 0,
+    unreserved: 0,
+    nextExpiry: null,
+    awards: []
+  };
+  return `
+    <section class="oil-manager" id="employee-oil-${employee.id}" aria-label="Manage Off-in-Lieu for ${escapeHtml(employee.name)}">
+      <div class="oil-manager-header">
+        <div>
+          <h3>Manage Off-in-Lieu</h3>
+          <p class="muted">Awards expire one full year after the Award Date.</p>
+        </div>
+        <button class="button small" type="button" data-action="manage-oil" data-id="${employee.id}" aria-expanded="true" aria-controls="employee-oil-${employee.id}">Close</button>
+      </div>
+      <div class="entitlement-medical-summary">
+        <div><span>Available</span><strong>${displayNumber(summary.available)} days</strong></div>
+        <div><span>Pending</span><strong>${displayNumber(summary.pending)} days</strong></div>
+        <div><span>Next expiry</span><strong>${summary.nextExpiry ? dateText(summary.nextExpiry) : "None"}</strong></div>
+      </div>
+      <form class="oil-award-form" data-form="oil-award" data-employee-id="${employee.id}">
+        <div class="field">
+          <label>Award Days</label>
+          <input name="days" type="number" min="0.5" step="0.5" value="0.5" required>
+        </div>
+        <div class="field">
+          <label>Award Date</label>
+          <input name="awardDate" type="date" value="${todayIso()}" required>
+        </div>
+        <div class="field oil-reason-field">
+          <label>Reason</label>
+          <input name="reason" placeholder="e.g. Weekend event support" required>
+        </div>
+        <div class="field full">
+          <div class="field-hint" data-oil-expiry role="status" aria-live="polite">Expires ${dateText(offInLieuExpiryDate(todayIso()))}. Usable through ${dateText(addIsoDays(offInLieuExpiryDate(todayIso()), -1))}.</div>
+        </div>
+        <div class="field actions"><button class="button primary small" type="submit">Award Off-in-Lieu</button></div>
+      </form>
+      <div class="oil-award-list">
+        ${summary.awards?.length
+          ? summary.awards.map(renderOffInLieuAward).join("")
+          : `<div class="empty">No Off-in-Lieu awards have been created for this employee.</div>`}
+      </div>
+    </section>
+  `;
+}
+
 function renderEmployees() {
   const managerChoices = employeeManagerChoices();
   renderShell(`
@@ -3099,6 +3212,7 @@ function renderEmployees() {
                     <summary class="button small">More</summary>
                     <div class="action-menu-list">
                       <button class="button small" type="button" data-action="manage-entitlements" data-id="${employee.id}" aria-expanded="${state.entitlementEmployeeId === employee.id}" aria-controls="employee-entitlements-${employee.id}">Manage Entitlements</button>
+                      <button class="button small" type="button" data-action="manage-oil" data-id="${employee.id}" aria-expanded="${state.offInLieuEmployeeId === employee.id}" aria-controls="employee-oil-${employee.id}">Manage Off-in-Lieu</button>
                       <button class="button small" type="button" data-action="open-leave-adjustment" data-id="${employee.id}">Adjust Leave</button>
                       <button class="button small" type="button" data-action="open-password-reset" data-id="${employee.id}">Reset Password</button>
                     </div>
@@ -3106,6 +3220,7 @@ function renderEmployees() {
                 </div>
               </div>
               ${state.entitlementEmployeeId === employee.id ? renderEntitlementManager(employee) : ""}
+              ${state.offInLieuEmployeeId === employee.id ? renderOffInLieuManager(employee) : ""}
             </div>
           `).join("")}
           </div>
@@ -3444,6 +3559,24 @@ document.addEventListener("submit", async (event) => {
       updateDashboard(data);
       showToast("Entitlement remaining balance updated.");
     }
+    if (formType === "oil-award") {
+      const awardBody = { ...body, employeeId: form.dataset.employeeId };
+      const data = await api("/api/off-in-lieu-awards", {
+        method: "POST",
+        body: JSON.stringify(awardBody)
+      });
+      updateDashboard(data);
+      showToast("Off-in-Lieu awarded.");
+    }
+    if (formType === "oil-revoke") {
+      if (!String(body.reason || "").trim()) throw new Error("Revocation Reason is required.");
+      const data = await api(`/api/off-in-lieu-awards/${form.dataset.awardId}/revoke`, {
+        method: "PATCH",
+        body: JSON.stringify(body)
+      });
+      updateDashboard(data);
+      showToast("Off-in-Lieu award revoked.");
+    }
     if (formType === "password") {
       const data = await api("/api/account/password", {
         method: "POST",
@@ -3544,10 +3677,24 @@ document.addEventListener("click", async (event) => {
     if (action === "manage-entitlements") {
       const opening = state.entitlementEmployeeId !== button.dataset.id;
       state.entitlementEmployeeId = opening ? button.dataset.id : null;
+      state.offInLieuEmployeeId = null;
       render();
       if (opening) {
         requestAnimationFrame(() => {
           document.querySelector(`#employee-entitlements-${CSS.escape(button.dataset.id)} input, #employee-entitlements-${CSS.escape(button.dataset.id)} select`)?.focus();
+        });
+      }
+      return;
+    }
+
+    if (action === "manage-oil") {
+      const opening = state.offInLieuEmployeeId !== button.dataset.id;
+      state.offInLieuEmployeeId = opening ? button.dataset.id : null;
+      state.entitlementEmployeeId = null;
+      render();
+      if (opening) {
+        requestAnimationFrame(() => {
+          document.querySelector(`#employee-oil-${CSS.escape(button.dataset.id)} input`)?.focus();
         });
       }
       return;
@@ -3704,6 +3851,11 @@ function updateAuditSearch(field) {
 }
 
 document.addEventListener("input", (event) => {
+  const oilAwardDate = event.target.closest("form[data-form='oil-award'] input[name='awardDate']");
+  if (oilAwardDate) {
+    updateOilExpiryGuidance(oilAwardDate.form);
+    return;
+  }
   const field = event.target.closest("[data-audit-search]");
   if (!field) return;
   updateAuditSearch(field);
