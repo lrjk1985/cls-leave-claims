@@ -249,3 +249,88 @@ where leave_type = 'Medical Leave';
 - National Service is uncapped and requires an Official Call-Up Notice.
 - Pending requests reserve balances and concurrent writes cannot exceed an enabled cap.
 - Overrides, remaining-balance adjustments, and audit events remain distinct.
+
+## Off-in-Lieu and Half-Day Rollout
+
+Apply `supabase/v3-off-in-lieu-half-day.sql` to a disposable Supabase branch or staging project before production. This migration is additive: it adds one request column, two OIL tables, validation constraints, and one allocation trigger.
+
+### Backup and Baseline
+
+1. Export `cls_users`, `cls_leave_requests`, `cls_off_in_lieu_awards`, and `cls_off_in_lieu_allocations` when the OIL tables already exist.
+2. Record the current row counts before and after the migration:
+
+```sql
+select 'cls_users' as table_name, count(*) as row_count from public.cls_users
+union all
+select 'cls_leave_requests', count(*) from public.cls_leave_requests;
+```
+
+The user and request counts must not decrease. Existing requests receive `day_portion = 'full'` automatically.
+
+### Staging Migration Checks
+
+1. Run `supabase/v3-off-in-lieu-half-day.sql` in the staging SQL Editor.
+2. Confirm the column, tables, RLS, and trigger:
+
+```sql
+select table_name, column_name, column_default, is_nullable
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'cls_leave_requests'
+  and column_name = 'day_portion';
+
+select c.relname as table_name, c.relrowsecurity as rls_enabled
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public'
+  and c.relname in ('cls_off_in_lieu_awards', 'cls_off_in_lieu_allocations');
+
+select trigger_name, event_manipulation, action_timing
+from information_schema.triggers
+where event_object_schema = 'public'
+  and event_object_table = 'cls_leave_requests'
+  and trigger_name = 'cls_allocate_off_in_lieu_trigger';
+```
+
+Expected: `day_portion` is non-null with default `full`; both OIL tables have RLS enabled; the allocation trigger runs `AFTER INSERT`.
+
+3. Confirm grants:
+
+```sql
+select table_name, grantee, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public'
+  and table_name in ('cls_off_in_lieu_awards', 'cls_off_in_lieu_allocations')
+order by table_name, grantee, privilege_type;
+```
+
+Expected: `service_role` has `SELECT`, `INSERT`, `UPDATE`, and `DELETE`; `anon` and `authenticated` have no grants.
+
+4. Test constraints inside a transaction and finish with `rollback`. Verify invalid portions, multi-date half-days, unsupported half-day types, quarter-day awards, and invalid expiry dates are rejected. Do not commit test records.
+
+5. Run the automated final-balance concurrency test with staging-only credentials:
+
+```bash
+SUPABASE_TEST_URL="https://your-staging-project.supabase.co" \
+SUPABASE_TEST_SERVICE_ROLE_KEY="your-staging-service-role-key" \
+npm test
+```
+
+Add one 0.5-day OIL award and submit two concurrent 0.5-day requests for the same eligible date. Exactly one request must commit, and the other must return `CLS_OIL_CAP`.
+
+### Application Smoke Test
+
+1. As Admin, award 1.5 OIL days and confirm the displayed expiry is the first anniversary of the award date, with usability ending the day before.
+2. As the employee, submit Morning Half and Afternoon Half requests for Annual, Urgent, Medical, OIL, and Unpaid leave. Medical still requires an MC.
+3. Confirm Hospitalization, Compassionate, Paternity, Maternity, Childcare, and National Service only offer Full Day.
+4. Confirm half-days reject date ranges, unscheduled dates, weekends, and Singapore public holidays.
+5. Confirm OIL uses the earliest-expiring valid award and that pending requests reserve balance.
+6. Approve, reject, and cancel OIL requests. Confirm approval retains usage while rejection and cancellation release reserved capacity.
+7. Confirm approval screens, history, emails, audit entries, and calendar descriptions identify Morning Half or Afternoon Half.
+8. Check desktop and mobile layouts, keyboard focus, and reduced-motion behavior.
+
+### Production and Rollback
+
+After staging acceptance, record production baselines, apply V3, deploy the matching application commit, and repeat the smoke test with a small admin-awarded balance.
+
+If application behavior must be rolled back, redeploy the previous application version. Do not drop `day_portion`, OIL tables, allocations, or the trigger during the incident; preserving the additive data keeps award and request history recoverable. Before accepting new OIL requests again, deploy the matching application and verify the trigger and final-0.5-day concurrency test.

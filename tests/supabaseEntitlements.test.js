@@ -32,6 +32,20 @@ test("clean-install rollout includes the verified entitlement schema", () => {
   assert.equal(cleanInstallSql.includes(entitlementSql), true);
 });
 
+test("clean-install rollout includes the verified OIL and half-day schema once", () => {
+  const cleanInstallSql = fs.readFileSync(cleanInstallSqlPath, "utf8");
+  const oilSql = fs.readFileSync(oilSqlPath, "utf8").trim();
+  assert.equal(cleanInstallSql.includes(oilSql), true);
+  assert.equal(
+    (cleanInstallSql.match(/create or replace function public\.cls_allocate_off_in_lieu\(\)/gi) || []).length,
+    1
+  );
+  assert.equal(
+    (cleanInstallSql.match(/create trigger cls_allocate_off_in_lieu_trigger/gi) || []).length,
+    1
+  );
+});
+
 test("OIL and half-day rollout creates a secured additive schema", () => {
   const sql = fs.readFileSync(oilSqlPath, "utf8");
 
