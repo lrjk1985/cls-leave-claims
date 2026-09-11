@@ -99,8 +99,10 @@ test("atomic trigger permits only one request for the final outpatient day", {
           name: "Concurrency Manager",
           email: `${managerId}@example.test`,
           role: "manager",
+          manager_id: null,
           service_start_date: "2025-01-01",
           leave_policy_year: 2026,
+          medical_leave_entitlement_override: null,
           password_salt: "test",
           password_hash: "test"
         },
@@ -197,6 +199,7 @@ test("atomic OIL trigger permits only one request for the final half-day", {
           name: "OIL Concurrency Manager",
           email: `${managerId}@example.test`,
           role: "manager",
+          manager_id: null,
           service_start_date: "2025-01-01",
           leave_policy_year: 2026,
           password_salt: "test",
@@ -260,8 +263,9 @@ test("atomic OIL trigger permits only one request for the final half-day", {
     const allocationsResponse = await rest(
       `cls_off_in_lieu_allocations?award_id=eq.${encodeURIComponent(awardId)}&select=id`
     );
-    assert.equal(allocationsResponse.ok, true, await allocationsResponse.text());
-    assert.equal((await allocationsResponse.json()).length, 1);
+    const allocationsText = await allocationsResponse.text();
+    assert.equal(allocationsResponse.ok, true, allocationsText);
+    assert.equal(JSON.parse(allocationsText).length, 1);
   } finally {
     await rest(`cls_leave_requests?employee_id=eq.${encodeURIComponent(employeeId)}`, { method: "DELETE" });
     await rest(`cls_off_in_lieu_awards?id=eq.${encodeURIComponent(awardId)}`, { method: "DELETE" });
