@@ -105,7 +105,8 @@ test("leaveSummary excludes separately tracked special leave from annual totals"
     "Paternity Leave",
     "Maternity Leave",
     "Childcare Leave",
-    "National Service Leave"
+    "National Service Leave",
+    "Off-in-Lieu Leave"
   ];
   const summary = leaveSummary(user, [
     { employeeId: "u1", leaveYear: 2026, type: "Annual Leave", status: "approved", days: 2 },

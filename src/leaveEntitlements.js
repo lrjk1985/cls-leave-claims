@@ -6,6 +6,7 @@ const LEAVE_TYPES = Object.freeze({
   PATERNITY: "Paternity Leave",
   MATERNITY: "Maternity Leave",
   CHILDCARE: "Childcare Leave",
+  OFF_IN_LIEU: "Off-in-Lieu Leave",
   NATIONAL_SERVICE: "National Service Leave",
   URGENT: "Urgent Leave",
   UNPAID: "Unpaid Leave"
@@ -24,6 +25,7 @@ const SPECIAL_LEAVE_TYPES = new Set([
   LEAVE_TYPES.PATERNITY.toLowerCase(),
   LEAVE_TYPES.MATERNITY.toLowerCase(),
   LEAVE_TYPES.CHILDCARE.toLowerCase(),
+  LEAVE_TYPES.OFF_IN_LIEU.toLowerCase(),
   LEAVE_TYPES.NATIONAL_SERVICE.toLowerCase()
 ]);
 const DOCUMENT_REQUIRED_TYPES = new Set([
