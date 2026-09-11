@@ -44,6 +44,7 @@ const {
   getSingaporePublicHolidaysForRange,
   syncSingaporePublicHolidays
 } = require("./src/publicHolidays");
+const { DAY_PORTIONS } = require("./src/offInLieu");
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
@@ -569,6 +570,7 @@ function leaveRequestToRow(request) {
     start_date: request.startDate,
     end_date: request.endDate,
     days: Number(request.days || 0),
+    day_portion: request.dayPortion || DAY_PORTIONS.FULL,
     leave_year: Number(request.leaveYear || currentLeaveYear()),
     excluded_dates: Array.isArray(request.excludedDates) ? request.excludedDates : [],
     reason: request.reason || "",
@@ -598,6 +600,7 @@ function leaveRequestFromRow(row) {
     startDate: row.start_date,
     endDate: row.end_date,
     days: Number(row.days || 0),
+    dayPortion: row.day_portion || DAY_PORTIONS.FULL,
     leaveYear: Number(row.leave_year || currentLeaveYear()),
     excludedDates: Array.isArray(row.excluded_dates) ? row.excluded_dates : [],
     reason: row.reason || "",
@@ -638,6 +641,60 @@ function leaveAdjustmentFromRow(row) {
     year: Number(row.year || currentLeaveYear()),
     days: Number(row.days || 0),
     reason: row.reason || "",
+    createdAt: row.created_at
+  };
+}
+
+function offInLieuAwardToRow(award) {
+  return {
+    id: award.id,
+    employee_id: award.employeeId,
+    days: Number(award.days),
+    award_date: award.awardDate,
+    expires_on: award.expiresOn,
+    reason: award.reason,
+    awarded_by: award.awardedBy,
+    revoked_at: nullish(award.revokedAt),
+    revoked_by: nullish(award.revokedBy),
+    revocation_reason: nullish(award.revocationReason),
+    created_at: award.createdAt
+  };
+}
+
+function offInLieuAwardFromRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    days: Number(row.days),
+    awardDate: row.award_date,
+    expiresOn: row.expires_on,
+    reason: row.reason,
+    awardedBy: row.awarded_by,
+    revokedAt: row.revoked_at,
+    revokedBy: row.revoked_by,
+    revocationReason: row.revocation_reason,
+    createdAt: row.created_at
+  };
+}
+
+function offInLieuAllocationToRow(allocation) {
+  return {
+    id: allocation.id,
+    leave_request_id: allocation.leaveRequestId,
+    award_id: allocation.awardId,
+    leave_date: allocation.leaveDate,
+    days: Number(allocation.days),
+    created_at: allocation.createdAt
+  };
+}
+
+function offInLieuAllocationFromRow(row) {
+  return {
+    id: row.id,
+    leaveRequestId: row.leave_request_id,
+    awardId: row.award_id,
+    leaveDate: row.leave_date,
+    days: Number(row.days),
     createdAt: row.created_at
   };
 }
@@ -871,7 +928,9 @@ const SUPABASE_TABLES = [
   { field: "leaveEntitlements", table: "cls_leave_entitlements", key: "id", order: "created_at.desc", toRow: leaveEntitlementToRow, fromRow: leaveEntitlementFromRow },
   { field: "leaveEntitlementAdjustments", table: "cls_leave_entitlement_adjustments", key: "id", order: "created_at.desc", toRow: leaveEntitlementAdjustmentToRow, fromRow: leaveEntitlementAdjustmentFromRow },
   { field: "leavePolicySettings", table: "cls_leave_policy_settings", key: "leave_type", order: "leave_type.asc", toRow: leavePolicySettingToRow, fromRow: leavePolicySettingFromRow },
+  { field: "offInLieuAwards", table: "cls_off_in_lieu_awards", key: "id", order: "created_at.desc", toRow: offInLieuAwardToRow, fromRow: offInLieuAwardFromRow },
   { field: "leaveRequests", table: "cls_leave_requests", key: "id", order: "created_at.desc", toRow: leaveRequestToRow, fromRow: leaveRequestFromRow },
+  { field: "offInLieuAllocations", table: "cls_off_in_lieu_allocations", key: "id", order: "created_at.desc", toRow: offInLieuAllocationToRow, fromRow: offInLieuAllocationFromRow },
   { field: "leaveAdjustments", table: "cls_leave_adjustments", key: "id", order: "created_at.desc", toRow: leaveAdjustmentToRow, fromRow: leaveAdjustmentFromRow },
   { field: "medicalClaims", table: "cls_claims", key: "id", order: "created_at.desc", toRow: claimToRow, fromRow: claimFromRow },
   { field: "emails", table: "cls_emails", key: "id", order: "created_at.desc", toRow: emailToRow, fromRow: emailFromRow },
@@ -1083,6 +1142,7 @@ function normalizeDb(db) {
     leaveRequests: Array.isArray(db.leaveRequests)
       ? db.leaveRequests.map((request) => ({
           ...request,
+          dayPortion: request.dayPortion || DAY_PORTIONS.FULL,
           medicalCertificate: request.medicalCertificate || null,
           excludedDates: Array.isArray(request.excludedDates) ? request.excludedDates : [],
           entitlementId: request.entitlementId || null,
@@ -1099,6 +1159,8 @@ function normalizeDb(db) {
       ? db.leaveEntitlementAdjustments
       : [],
     leavePolicySettings: Array.isArray(db.leavePolicySettings) ? db.leavePolicySettings : [],
+    offInLieuAwards: Array.isArray(db.offInLieuAwards) ? db.offInLieuAwards : [],
+    offInLieuAllocations: Array.isArray(db.offInLieuAllocations) ? db.offInLieuAllocations : [],
     medicalClaims: Array.isArray(db.medicalClaims) ? db.medicalClaims.map(normalizeClaim) : [],
     emails: Array.isArray(db.emails) ? db.emails : [],
     auditEvents: Array.isArray(db.auditEvents) ? db.auditEvents.map(normalizeAuditEvent) : [],

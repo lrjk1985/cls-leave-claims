@@ -5,10 +5,16 @@ const path = require("node:path");
 const { __test } = require("../server");
 
 test("normalizeDb adds entitlement collections and default work schedules", () => {
-  const db = __test.normalizeDb({ users: [{ id: "u1", serviceStartDate: "2026-01-01" }] });
+  const db = __test.normalizeDb({
+    users: [{ id: "u1", serviceStartDate: "2026-01-01" }],
+    leaveRequests: [{ id: "leave_1", type: "Annual Leave" }]
+  });
   assert.deepEqual(db.leaveEntitlements, []);
   assert.deepEqual(db.leaveEntitlementAdjustments, []);
   assert.deepEqual(db.leavePolicySettings, []);
+  assert.deepEqual(db.offInLieuAwards, []);
+  assert.deepEqual(db.offInLieuAllocations, []);
+  assert.equal(db.leaveRequests[0].dayPortion, "full");
   assert.deepEqual(db.users[0].workSchedule, [1, 2, 3, 4, 5]);
 });
 const { medicalClaimSummary, medicalLeaveSummary } = require("../src/domain");
@@ -1808,6 +1814,7 @@ test("Supabase table mappings round-trip core app records", () => {
       startDate: "2026-06-04",
       endDate: "2026-06-04",
       days: 1,
+      dayPortion: "morning",
       leaveYear: 2026,
       excludedDates: [{ date: "2026-06-05", reason: "Public Holiday" }],
       reason: "Sick",
@@ -1825,6 +1832,27 @@ test("Supabase table mappings round-trip core app records", () => {
       cancellationNote: "",
       cancelledAt: null,
       cancelledBy: null
+    },
+    offInLieuAwards: {
+      id: "oil_award_1",
+      employeeId: "usr_employee",
+      days: 1.5,
+      awardDate: "2026-09-15",
+      expiresOn: "2027-09-15",
+      reason: "Weekend event support",
+      awardedBy: "usr_admin",
+      revokedAt: null,
+      revokedBy: null,
+      revocationReason: null,
+      createdAt: "2026-09-15T00:00:00.000Z"
+    },
+    offInLieuAllocations: {
+      id: "oil_allocation_1",
+      leaveRequestId: "leave_1",
+      awardId: "oil_award_1",
+      leaveDate: "2026-09-16",
+      days: 0.5,
+      createdAt: "2026-09-15T01:00:00.000Z"
     },
     leaveAdjustments: {
       id: "adjust_1",
