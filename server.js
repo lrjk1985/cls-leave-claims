@@ -44,7 +44,13 @@ const {
   getSingaporePublicHolidaysForRange,
   syncSingaporePublicHolidays
 } = require("./src/publicHolidays");
-const { DAY_PORTIONS } = require("./src/offInLieu");
+const {
+  allocateOffInLieu,
+  DAY_PORTIONS,
+  normalizeDayPortion,
+  offInLieuExpiresOn,
+  offInLieuSummary
+} = require("./src/offInLieu");
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
@@ -3136,6 +3142,7 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
 
       return {
         employeeId: employee.id,
+        offInLieu: publicOffInLieuSummary(db, viewer, employee, asOfDate),
         medicalHospitalization: medicalHospitalizationSummary(employee, db.leaveRequests, {
           year,
           asOfDate,
@@ -3153,6 +3160,24 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
         entitlements: publicEntitlements
       };
     });
+}
+
+function publicOffInLieuSummary(db, viewer, employee, asOfDate = formatIsoDate(new Date())) {
+  const summary = offInLieuSummary({
+    employeeId: employee.id,
+    asOfDate,
+    awards: db.offInLieuAwards || [],
+    allocations: db.offInLieuAllocations || [],
+    requests: db.leaveRequests || []
+  });
+  return {
+    ...summary,
+    awards: summary.awards.map((award) => {
+      if (canAdmin(viewer)) return award;
+      const { revokedAt, revokedBy, revocationReason, ...publicAward } = award;
+      return publicAward;
+    })
+  };
 }
 
 function dashboard(db, user) {
@@ -3181,6 +3206,7 @@ function dashboard(db, user) {
     medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    offInLieuSummary: publicOffInLieuSummary(db, user, user),
     leaveEntitlementSummaries: leaveEntitlementSummaries(db, user),
     leavePolicySettings: effectiveLeavePolicySettings(db),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
@@ -3221,6 +3247,7 @@ function dashboardPatch(db, user) {
     medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
+    offInLieuSummary: publicOffInLieuSummary(db, user, user),
     leaveEntitlementSummaries: leaveEntitlementSummaries(db, user),
     leavePolicySettings: effectiveLeavePolicySettings(db),
     receiptStorageSummary: canAdmin(user) ? receiptStorageSummary(db) : null,
@@ -3515,6 +3542,129 @@ function createEntitlementAdjustment(db, actor, entitlementId, body) {
     metadata: { entitlementId: entitlement.id, days, reason, before, after }
   });
   return adjustment;
+}
+
+function normalizeOffInLieuDays(value) {
+  const days = Number(value);
+  if (!Number.isFinite(days) || days <= 0 || !Number.isInteger(days * 2)) {
+    throw new Error("Off-in-Lieu days must be a positive whole-day or half-day amount.");
+  }
+  return days;
+}
+
+function createOffInLieuAward(db, actor, body) {
+  requireAdmin(actor);
+  const employee = getUser(db, body.employeeId);
+  if (!employee) {
+    const error = new Error("Employee was not found.");
+    error.status = 404;
+    throw error;
+  }
+  if (employee.active === false) {
+    throw new Error("Off-in-Lieu can only be awarded to an active employee.");
+  }
+  const awardDate = String(body.awardDate || "");
+  assertIsoDate(awardDate, "Award date");
+  const days = normalizeOffInLieuDays(body.days);
+  const reason = String(body.reason || "").trim();
+  if (!reason) throw new Error("Award reason is required.");
+
+  const createdAt = nowIso();
+  const award = {
+    id: id("oil_award"),
+    employeeId: employee.id,
+    days,
+    awardDate,
+    expiresOn: offInLieuExpiresOn(awardDate),
+    reason,
+    awardedBy: actor.id,
+    revokedAt: null,
+    revokedBy: null,
+    revocationReason: null,
+    createdAt
+  };
+  if (!Array.isArray(db.offInLieuAwards)) db.offInLieuAwards = [];
+  db.offInLieuAwards.unshift(award);
+  addAuditEvent(db, actor, {
+    action: "oil.awarded",
+    affectedUserId: employee.id,
+    relatedType: "off_in_lieu_award",
+    relatedId: award.id,
+    summary: `${actor.name} awarded ${days} day${days === 1 ? "" : "s"} of Off-in-Lieu to ${employee.name}.`,
+    metadata: {
+      employeeId: employee.id,
+      days,
+      awardDate,
+      expiresOn: award.expiresOn,
+      reason,
+      actorId: actor.id
+    }
+  });
+  return award;
+}
+
+function revokeOffInLieuAward(db, actor, awardId, body = {}) {
+  requireAdmin(actor);
+  const award = (db.offInLieuAwards || []).find((item) => item.id === awardId);
+  if (!award) {
+    const error = new Error("Off-in-Lieu award was not found.");
+    error.status = 404;
+    throw error;
+  }
+  if (award.revokedAt) throw new Error("This Off-in-Lieu award has already been revoked.");
+  const reason = String(body.reason || body.revocationReason || "").trim();
+  if (!reason) throw new Error("Revocation reason is required.");
+  const statusByRequest = new Map(
+    (db.leaveRequests || []).map((request) => [request.id, request.status])
+  );
+  const hasPendingAllocation = (db.offInLieuAllocations || []).some(
+    (allocation) => allocation.awardId === award.id &&
+      statusByRequest.get(allocation.leaveRequestId) === "pending"
+  );
+  if (hasPendingAllocation) {
+    throw new Error("This award has pending leave allocated to it and cannot be revoked.");
+  }
+
+  award.revokedAt = nowIso();
+  award.revokedBy = actor.id;
+  award.revocationReason = reason;
+  const employee = getUser(db, award.employeeId);
+  addAuditEvent(db, actor, {
+    action: "oil.revoked",
+    affectedUserId: award.employeeId,
+    relatedType: "off_in_lieu_award",
+    relatedId: award.id,
+    summary: `${actor.name} revoked an Off-in-Lieu award for ${employee?.name || "employee"}.`,
+    metadata: {
+      employeeId: award.employeeId,
+      days: award.days,
+      awardDate: award.awardDate,
+      expiresOn: award.expiresOn,
+      reason,
+      actorId: actor.id
+    }
+  });
+  return award;
+}
+
+function scheduledLeaveDates(startDate, endDate, schedule, publicHolidays, daysPerDate = 1) {
+  const scheduledDays = new Set(normalizeWorkSchedule(schedule));
+  const holidayDates = new Set((publicHolidays || []).map((holiday) => holiday.date));
+  const dates = [];
+  for (let date = startDate; date <= endDate; date = addDays(date, 1)) {
+    const parsed = assertIsoDate(date, "Leave date");
+    const isoWeekday = parsed.getUTCDay() || 7;
+    if (scheduledDays.has(isoWeekday) && !holidayDates.has(date)) {
+      dates.push({ date, days: daysPerDate });
+    }
+  }
+  return dates;
+}
+
+function offInLieuAllocationId(requestId, awardId, leaveDate) {
+  return `oilalloc_${crypto.createHash("md5")
+    .update(`${requestId}:${awardId}:${leaveDate}`)
+    .digest("hex")}`;
 }
 
 async function createEmployee(db, body) {
@@ -3839,6 +3989,14 @@ async function createLeaveRequest(db, user, body) {
   assertIsoDate(startDate, "Start date");
   assertIsoDate(endDate, "End date");
   leaveDayBreakdown(startDate, endDate);
+  const dayPortion = normalizeDayPortion({
+    dayPortion: body.dayPortion,
+    type,
+    startDate,
+    endDate
+  });
+  const isHalfDay = dayPortion !== DAY_PORTIONS.FULL;
+  const isOffInLieu = type === LEAVE_TYPES.OFF_IN_LIEU;
   const leaveYear = Number(startDate.slice(0, 4));
   const annualEntitlementType = type === LEAVE_TYPES.COMPASSIONATE || type === LEAVE_TYPES.CHILDCARE;
   const eventEntitlementType = type === LEAVE_TYPES.PATERNITY || type === LEAVE_TYPES.MATERNITY;
@@ -3876,16 +4034,21 @@ async function createLeaveRequest(db, user, body) {
   const breakdown = leaveDayBreakdown(startDate, endDate, publicHolidays);
   const usesCalendarDays = type === LEAVE_TYPES.MATERNITY && Boolean(linkedEntitlement);
   const usesScheduleSnapshot = !usesCalendarDays && (
-    isMedicalLeave || isHospitalizationLeave || isNationalServiceLeave || Boolean(linkedEntitlement)
+    isMedicalLeave || isHospitalizationLeave || isNationalServiceLeave || isOffInLieu ||
+    isHalfDay || Boolean(linkedEntitlement)
   );
   const workScheduleSnapshot = linkedEntitlement || usesScheduleSnapshot
     ? normalizeWorkSchedule(linkedEntitlement?.workScheduleSnapshot || user.workSchedule)
     : null;
-  const days = usesCalendarDays
+  const calculatedDays = usesCalendarDays
     ? calendarDaysBetween(startDate, endDate)
     : usesScheduleSnapshot
       ? scheduledDaysBetween(startDate, endDate, workScheduleSnapshot, publicHolidays)
       : breakdown.days;
+  if (isHalfDay && calculatedDays !== 1) {
+    throw new Error("Half-day leave must use one scheduled working date that is not a Singapore public holiday.");
+  }
+  const days = isHalfDay ? 0.5 : calculatedDays;
 
   if (days <= 0) {
     throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
@@ -3910,6 +4073,8 @@ async function createLeaveRequest(db, user, body) {
     if (days > summary.combined.unreserved) {
       throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
     }
+  } else if (isOffInLieu) {
+    // OIL is validated again by the database trigger when Supabase is enabled.
   } else if (linkedEntitlement) {
     const summary = entitlementSummary(
       linkedEntitlement,
@@ -3941,6 +4106,7 @@ async function createLeaveRequest(db, user, body) {
     startDate,
     endDate,
     days,
+    dayPortion,
     leaveYear,
     excludedDates: usesCalendarDays ? [] : breakdown.excludedDates,
     reason,
@@ -3961,6 +4127,25 @@ async function createLeaveRequest(db, user, body) {
     decidedBy: null
   };
 
+  let offInLieuAllocationDrafts = [];
+  if (isOffInLieu) {
+    const leaveDates = scheduledLeaveDates(
+      startDate,
+      endDate,
+      workScheduleSnapshot,
+      publicHolidays,
+      isHalfDay ? 0.5 : 1
+    );
+    offInLieuAllocationDrafts = allocateOffInLieu({
+      employeeId: user.id,
+      requestId: request.id,
+      leaveDates,
+      awards: db.offInLieuAwards || [],
+      allocations: db.offInLieuAllocations || [],
+      requests: db.leaveRequests || []
+    });
+  }
+
   if (needsMedicalCertificate) {
     request.medicalCertificate = body.medicalCertificateUpload
       ? await medicalCertificateFromSupabaseUpload(user, body.medicalCertificateUpload)
@@ -3973,6 +4158,18 @@ async function createLeaveRequest(db, user, body) {
   }
 
   db.leaveRequests.unshift(request);
+  if (offInLieuAllocationDrafts.length) {
+    if (!Array.isArray(db.offInLieuAllocations)) db.offInLieuAllocations = [];
+    db.offInLieuAllocations.unshift(...offInLieuAllocationDrafts.map((allocation) => ({
+      ...allocation,
+      id: offInLieuAllocationId(
+        allocation.leaveRequestId,
+        allocation.awardId,
+        allocation.leaveDate
+      ),
+      createdAt
+    })));
+  }
   await addEmail(db, {
     recipientId: user.managerId,
     type: "leave_submitted",
@@ -4014,6 +4211,14 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
   }
 
   assertDecision(body.status);
+  if (body.status === "approved" && request.type === LEAVE_TYPES.OFF_IN_LIEU) {
+    const allocatedDays = (db.offInLieuAllocations || [])
+      .filter((allocation) => allocation.leaveRequestId === request.id)
+      .reduce((total, allocation) => total + Number(allocation.days || 0), 0);
+    if (allocatedDays !== Number(request.days || 0)) {
+      throw new Error("This Off-in-Lieu request is not fully funded and cannot be approved.");
+    }
+  }
   const decidedAt = nowIso();
   request.status = body.status;
   request.decisionNote = String(body.decisionNote || "").trim();
@@ -4433,6 +4638,31 @@ async function handleApi(req, res, pathname) {
       data: {
         adjustment,
         employee: publicEmployee(db, employee),
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
+  }
+
+  if (req.method === "POST" && pathname === "/api/off-in-lieu-awards") {
+    const award = createOffInLieuAward(db, user, body);
+    await saveDb(db);
+    return jsonResponse(res, 201, {
+      data: {
+        award,
+        patch: dashboardPatch(db, user),
+        stale: { history: ["leave"], audit: true }
+      }
+    });
+  }
+
+  const offInLieuRevokeMatch = pathname.match(/^\/api\/off-in-lieu-awards\/([^/]+)\/revoke$/);
+  if (offInLieuRevokeMatch && req.method === "PATCH") {
+    const award = revokeOffInLieuAward(db, user, offInLieuRevokeMatch[1], body);
+    await saveDb(db);
+    return jsonResponse(res, 200, {
+      data: {
+        award,
         patch: dashboardPatch(db, user),
         stale: { history: ["leave"], audit: true }
       }
@@ -4859,6 +5089,7 @@ module.exports = {
     createLeaveAdjustment,
     createLeaveEntitlement,
     createLeaveRequest,
+    createOffInLieuAward,
     dashboard,
     deliverQueuedEmails,
     ensureAnnualSpecialLeaveEntitlements,
@@ -4873,6 +5104,7 @@ module.exports = {
     receiptUploadMetadata,
     recomputeEmployeeLeaveEntitlement,
     resetEmployeePassword,
+    revokeOffInLieuAward,
     resolveSupabaseSignedUrl,
     sessions,
     storageObjectEndpoint,

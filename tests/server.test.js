@@ -813,6 +813,173 @@ test("createLeaveRequest lets unlimited annual leave exceed annual balance", asy
   assert.equal(db.emails[0].recipientId, "usr_manager");
 });
 
+test("admin awards OIL with automatic expiry and employees cannot self-award", () => {
+  const admin = { id: "usr_admin", name: "Admin", role: "admin", active: true };
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    role: "employee",
+    active: true
+  };
+  const db = __test.normalizeDb({ users: [admin, employee] });
+
+  const award = __test.createOffInLieuAward(db, admin, {
+    employeeId: employee.id,
+    days: 1.5,
+    awardDate: "2026-09-15",
+    reason: "Weekend event support"
+  });
+
+  assert.equal(award.expiresOn, "2027-09-15");
+  assert.equal(award.awardedBy, admin.id);
+  assert.equal(db.auditEvents[0].action, "oil.awarded");
+  assert.throws(
+    () => __test.createOffInLieuAward(db, employee, {
+      employeeId: employee.id,
+      days: 1,
+      awardDate: "2026-09-15",
+      reason: "Invalid self-award"
+    }),
+    /admin/i
+  );
+});
+
+test("OIL revocation requires a reason and rejects awards reserved by pending leave", () => {
+  const admin = { id: "usr_admin", name: "Admin", role: "admin", active: true };
+  const employee = { id: "usr_employee", name: "Employee", role: "employee", active: true };
+  const db = __test.normalizeDb({ users: [admin, employee] });
+  const award = __test.createOffInLieuAward(db, admin, {
+    employeeId: employee.id,
+    days: 1,
+    awardDate: "2026-09-15",
+    reason: "Weekend event support"
+  });
+  db.leaveRequests.push({ id: "leave_pending", status: "pending" });
+  db.offInLieuAllocations.push({
+    id: "oilalloc_pending",
+    leaveRequestId: "leave_pending",
+    awardId: award.id,
+    leaveDate: "2026-10-01",
+    days: 0.5
+  });
+
+  assert.throws(
+    () => __test.revokeOffInLieuAward(db, admin, award.id, { reason: "" }),
+    /reason/i
+  );
+  assert.throws(
+    () => __test.revokeOffInLieuAward(db, admin, award.id, { reason: "Entered in error" }),
+    /pending/i
+  );
+
+  db.leaveRequests[0].status = "rejected";
+  const revoked = __test.revokeOffInLieuAward(db, admin, award.id, {
+    reason: "Entered in error"
+  });
+  assert.equal(revoked.revokedBy, admin.id);
+  assert.equal(revoked.revocationReason, "Entered in error");
+  assert.equal(db.auditEvents[0].action, "oil.revoked");
+});
+
+test("createLeaveRequest supports eligible half-days and rejects excluded or multi-date half-days", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    role: "employee",
+    active: true,
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    annualLeaveEntitlement: 14,
+    leaveEntitlement: 14,
+    medicalLeaveEntitlement: 14,
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({ users: [employee], emails: [] });
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Annual Leave",
+    startDate: "2026-09-15",
+    endDate: "2026-09-15",
+    dayPortion: "morning",
+    reason: "Appointment"
+  });
+  assert.equal(request.days, 0.5);
+  assert.equal(request.dayPortion, "morning");
+
+  await assert.rejects(
+    () => __test.createLeaveRequest(db, employee, {
+      type: "Compassionate Leave",
+      startDate: "2026-09-16",
+      endDate: "2026-09-16",
+      dayPortion: "afternoon"
+    }),
+    /Full Day/i
+  );
+  await assert.rejects(
+    () => __test.createLeaveRequest(db, employee, {
+      type: "Annual Leave",
+      startDate: "2026-09-16",
+      endDate: "2026-09-17",
+      dayPortion: "morning"
+    }),
+    /single date/i
+  );
+});
+
+test("OIL requests allocate earliest-expiring valid awards and expose a dashboard summary", async () => {
+  const employee = {
+    id: "usr_employee",
+    name: "Employee",
+    role: "employee",
+    active: true,
+    managerId: "usr_manager",
+    leavePolicyYear: 2026,
+    workSchedule: [1, 2, 3, 4, 5]
+  };
+  const db = __test.normalizeDb({
+    users: [employee],
+    emails: [],
+    offInLieuAwards: [
+      {
+        id: "oil_later",
+        employeeId: employee.id,
+        days: 1,
+        awardDate: "2026-09-01",
+        expiresOn: "2027-09-01",
+        reason: "Later",
+        awardedBy: "usr_admin",
+        createdAt: "2026-09-01T00:00:00.000Z"
+      },
+      {
+        id: "oil_earlier",
+        employeeId: employee.id,
+        days: 0.5,
+        awardDate: "2026-08-01",
+        expiresOn: "2027-08-01",
+        reason: "Earlier",
+        awardedBy: "usr_admin",
+        createdAt: "2026-08-01T00:00:00.000Z"
+      }
+    ]
+  });
+
+  const request = await __test.createLeaveRequest(db, employee, {
+    type: "Off-in-Lieu Leave",
+    startDate: "2026-09-15",
+    endDate: "2026-09-15",
+    dayPortion: "afternoon",
+    reason: "Personal appointment"
+  });
+
+  assert.equal(request.days, 0.5);
+  assert.equal(db.offInLieuAllocations.length, 1);
+  assert.equal(db.offInLieuAllocations[0].awardId, "oil_earlier");
+  const payload = __test.dashboard(db, employee);
+  assert.equal(payload.offInLieuSummary.pending, 0.5);
+  assert.equal(payload.offInLieuSummary.unreserved, 1);
+  assert.equal(payload.offInLieuSummary.nextExpiry, "2027-09-01");
+});
+
 test("createLeaveRequest keeps medical leave capped for unlimited annual leave users", async () => {
   const employee = {
     id: "usr_employee",
