@@ -5,6 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const sqlPath = path.join(__dirname, "..", "supabase", "v2-leave-entitlements.sql");
+const oilSqlPath = path.join(__dirname, "..", "supabase", "v3-off-in-lieu-half-day.sql");
 const cleanInstallSqlPath = path.join(__dirname, "..", "supabase", "v1-rollout.sql");
 
 test("leave entitlement rollout creates secured additive schema", () => {
@@ -29,6 +30,24 @@ test("clean-install rollout includes the verified entitlement schema", () => {
   const cleanInstallSql = fs.readFileSync(cleanInstallSqlPath, "utf8");
   const entitlementSql = fs.readFileSync(sqlPath, "utf8").trim();
   assert.equal(cleanInstallSql.includes(entitlementSql), true);
+});
+
+test("OIL and half-day rollout creates a secured additive schema", () => {
+  const sql = fs.readFileSync(oilSqlPath, "utf8");
+
+  assert.match(sql, /add column if not exists day_portion/i);
+  assert.match(sql, /day_portion in \('full', 'morning', 'afternoon'\)/i);
+  assert.match(sql, /create table if not exists public\.cls_off_in_lieu_awards/i);
+  assert.match(sql, /create table if not exists public\.cls_off_in_lieu_allocations/i);
+  assert.match(sql, /enable row level security/i);
+  assert.match(sql, /revoke all[\s\S]*from anon, authenticated/i);
+  assert.match(sql, /grant select, insert, update, delete[\s\S]*to service_role/i);
+  assert.match(sql, /create or replace function public\.cls_allocate_off_in_lieu\(\)/i);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /for update/i);
+  assert.match(sql, /after insert on public\.cls_leave_requests/i);
+  assert.match(sql, /revoke all on function public\.cls_allocate_off_in_lieu\(\) from public, anon, authenticated/i);
+  assert.match(sql, /CLS_OIL_CAP:/i);
 });
 
 const supabaseTestUrl = process.env.SUPABASE_TEST_URL;
