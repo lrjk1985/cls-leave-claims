@@ -170,3 +170,101 @@ test("atomic trigger permits only one request for the final outpatient day", {
     });
   }
 });
+
+test("atomic OIL trigger permits only one request for the final half-day", {
+  skip: !supabaseTestUrl || !supabaseTestKey
+}, async () => {
+  const suffix = crypto.randomUUID();
+  const managerId = `test_oil_manager_${suffix}`;
+  const employeeId = `test_oil_employee_${suffix}`;
+  const awardId = `test_oil_award_${suffix}`;
+  const headers = {
+    apikey: supabaseTestKey,
+    Authorization: `Bearer ${supabaseTestKey}`,
+    "Content-Type": "application/json"
+  };
+  const rest = (resource, options = {}) => fetch(
+    `${supabaseTestUrl.replace(/\/$/, "")}/rest/v1/${resource}`,
+    { ...options, headers: { ...headers, ...(options.headers || {}) } }
+  );
+
+  try {
+    const usersResponse = await rest("cls_users", {
+      method: "POST",
+      body: JSON.stringify([
+        {
+          id: managerId,
+          name: "OIL Concurrency Manager",
+          email: `${managerId}@example.test`,
+          role: "manager",
+          service_start_date: "2025-01-01",
+          leave_policy_year: 2026,
+          password_salt: "test",
+          password_hash: "test"
+        },
+        {
+          id: employeeId,
+          name: "OIL Concurrency Employee",
+          email: `${employeeId}@example.test`,
+          role: "employee",
+          manager_id: managerId,
+          service_start_date: "2025-01-01",
+          leave_policy_year: 2026,
+          password_salt: "test",
+          password_hash: "test"
+        }
+      ])
+    });
+    assert.equal(usersResponse.ok, true, await usersResponse.text());
+
+    const awardResponse = await rest("cls_off_in_lieu_awards", {
+      method: "POST",
+      body: JSON.stringify({
+        id: awardId,
+        employee_id: employeeId,
+        days: 0.5,
+        award_date: "2026-07-01",
+        expires_on: "2027-07-01",
+        reason: "Concurrency test",
+        awarded_by: managerId
+      })
+    });
+    assert.equal(awardResponse.ok, true, await awardResponse.text());
+
+    const makeRequest = (id) => rest("cls_leave_requests", {
+      method: "POST",
+      body: JSON.stringify({
+        id,
+        employee_id: employeeId,
+        manager_id: managerId,
+        type: "Off-in-Lieu Leave",
+        start_date: "2026-07-21",
+        end_date: "2026-07-21",
+        days: 0.5,
+        day_portion: "morning",
+        leave_year: 2026,
+        excluded_dates: [],
+        counting_method: "scheduled_working_days",
+        work_schedule_snapshot: [1, 2, 3, 4, 5],
+        status: "pending"
+      })
+    });
+    const responses = await Promise.all([
+      makeRequest(`test_oil_leave_a_${suffix}`),
+      makeRequest(`test_oil_leave_b_${suffix}`)
+    ]);
+    assert.equal(responses.filter((response) => response.ok).length, 1);
+    const rejectedResponse = responses.find((response) => !response.ok);
+    assert.match(await rejectedResponse.text(), /CLS_OIL_CAP:/);
+
+    const allocationsResponse = await rest(
+      `cls_off_in_lieu_allocations?award_id=eq.${encodeURIComponent(awardId)}&select=id`
+    );
+    assert.equal(allocationsResponse.ok, true, await allocationsResponse.text());
+    assert.equal((await allocationsResponse.json()).length, 1);
+  } finally {
+    await rest(`cls_leave_requests?employee_id=eq.${encodeURIComponent(employeeId)}`, { method: "DELETE" });
+    await rest(`cls_off_in_lieu_awards?id=eq.${encodeURIComponent(awardId)}`, { method: "DELETE" });
+    await rest(`cls_users?id=in.(${encodeURIComponent(employeeId)},${encodeURIComponent(managerId)})`, { method: "DELETE" });
+  }
+});
