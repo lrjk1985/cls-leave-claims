@@ -1001,6 +1001,69 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.duration-field {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.duration-field legend {
+  margin-bottom: 7px;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.duration-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--grey-2);
+}
+
+.duration-control label {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.duration-control input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+}
+
+.duration-control span {
+  display: grid;
+  min-height: var(--tap-target);
+  place-items: center;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  text-align: center;
+  transition:
+    color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+}
+
+.duration-control input:checked + span {
+  border-color: var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(58, 49, 84, 0.08);
+}
+
+.duration-control input:focus-visible + span {
+  outline: 3px solid rgba(255, 138, 91, 0.2);
+  outline-offset: 1px;
+}
+
 label {
   font-weight: 700;
   font-size: 13px;
@@ -1721,6 +1784,10 @@ tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  .duration-control {
+    grid-template-columns: 1fr;
+  }
+
   .entitlement-grid {
     grid-template-columns: 1fr;
   }

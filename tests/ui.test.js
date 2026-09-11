@@ -128,6 +128,18 @@ test("leave request form previews usage and blocks clearly unavailable grants", 
   assert.match(appSource, /data-entitlement-blocked/);
 });
 
+test("leave form includes OIL and accessible half-day duration controls", () => {
+  assert.match(appSource, /<option>Off-in-Lieu Leave<\/option>/);
+  assert.match(appSource, /name="dayPortion"/);
+  assert.match(appSource, /value="full"/);
+  assert.match(appSource, /value="morning"/);
+  assert.match(appSource, /value="afternoon"/);
+  assert.match(appSource, /Half-day leave must use a single date/);
+  assert.match(appSource, /function updateLeaveDurationField/);
+  assert.match(appSource, /Next expiry/);
+  assert.match(cssSource, /\.duration-control\s*\{/);
+});
+
 test("approvers see entitlement context without changed decision controls", () => {
   assert.match(appSource, /function renderLeaveApprovalContext/);
   assert.match(appSource, /Eligibility verified/);

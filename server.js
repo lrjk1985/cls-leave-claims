@@ -3175,7 +3175,7 @@ function publicOffInLieuSummary(db, viewer, employee, asOfDate = formatIsoDate(n
     awards: summary.awards.map((award) => {
       if (canAdmin(viewer)) return award;
       const { revokedAt, revokedBy, revocationReason, ...publicAward } = award;
-      return publicAward;
+      return { ...publicAward, revoked: Boolean(revokedAt) };
     })
   };
 }
