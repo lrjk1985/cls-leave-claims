@@ -148,6 +148,14 @@ test("dashboard patches refresh OIL balance after an award", () => {
   assert.match(patchSource, /"offInLieuSummary"/);
 });
 
+test("leave form blocks scheduled leave when the dates contain no working day", () => {
+  const estimateSource = appSource.slice(
+    appSource.indexOf("function updateLeaveRequestEstimate"),
+    appSource.indexOf("const HALF_DAY_LEAVE_TYPES")
+  );
+  assert.match(estimateSource, /The selected dates do not include a scheduled working day/);
+});
+
 test("admin directory includes inline OIL award and revoke management", () => {
   assert.match(appSource, /Manage Off-in-Lieu/);
   assert.match(appSource, /Award Off-in-Lieu/);

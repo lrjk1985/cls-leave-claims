@@ -2191,6 +2191,9 @@ function updateLeaveRequestEstimate(form) {
   if (!unavailable && isHalfDay && scheduledDays !== 1) {
     unavailable = "Half-day leave must be on one of your scheduled working days.";
   }
+  if (!unavailable && !isHalfDay && !usesCalendarDays && scheduledDays === 0) {
+    unavailable = "The selected dates do not include a scheduled working day.";
+  }
   if (
     type === "Maternity Leave" &&
     context.entitlement &&
