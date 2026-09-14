@@ -1336,7 +1336,7 @@ function renderLeaveAdjustmentDialog() {
           <div>
             <div class="metric-label">Employee</div>
             <div class="detail-value">${escapeHtml(employee.name)}</div>
-            <div class="muted">Current total leave entitlement: ${employee.leaveEntitlement}</div>
+            <div class="muted">Current Remaining Leave: ${employee.unlimitedAnnualLeave ? "Unlimited" : displayNumber(employeeEntitlementBundle(employee.id).annualLeave?.available ?? 0)}</div>
           </div>
           <label class="field" for="leave-adjustment-direction">
             <span>Adjustment</span>
@@ -3212,8 +3212,12 @@ function renderEmployees() {
                 <input data-field="unlimitedAnnualLeave" type="checkbox" ${employee.unlimitedAnnualLeave ? "checked" : ""}>
               </label>
               <div class="field">
-                <label>Current Total Leave</label>
-                <input value="${employee.unlimitedAnnualLeave ? "Unlimited" : employee.leaveEntitlement}" disabled>
+                <label>Current Remaining Leave</label>
+                <input value="${employee.unlimitedAnnualLeave ? "Unlimited" : displayNumber(employeeEntitlementBundle(employee.id).annualLeave?.available ?? 0)}" disabled>
+              </div>
+              <div class="field">
+                <label>Off-in-Lieu Available (days)</label>
+                <input value="${displayNumber(employeeEntitlementBundle(employee.id).offInLieu?.unreserved ?? 0)}" disabled>
               </div>
               <div class="field">
                 <label>Medical Leave Days</label>

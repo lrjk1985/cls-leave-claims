@@ -3147,6 +3147,10 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
 
       return {
         employeeId: employee.id,
+        annualLeave: leaveSummary(employee, db.leaveRequests, {
+          adjustments: leaveAdjustmentTotal(db, employee.id, Number(employee.leavePolicyYear || currentLeaveYear())),
+          birthdayLeave: employee.birthdayLeaveEntitlement
+        }),
         offInLieu: publicOffInLieuSummary(db, viewer, employee, asOfDate),
         medicalHospitalization: medicalHospitalizationSummary(employee, db.leaveRequests, {
           year,

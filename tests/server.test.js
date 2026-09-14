@@ -17,6 +17,34 @@ test("normalizeDb adds entitlement collections and default work schedules", () =
   assert.equal(db.leaveRequests[0].dayPortion, "full");
   assert.deepEqual(db.users[0].workSchedule, [1, 2, 3, 4, 5]);
 });
+
+test("admin employee balances match employee remaining leave and separate OIL reservations", () => {
+  const year = new Date().getFullYear();
+  const db = __test.normalizeDb({
+    users: [
+      { id: "admin", role: "admin", active: true },
+      { id: "employee", role: "employee", active: true, managerId: "admin",
+        leavePolicyYear: year, annualLeaveEntitlement: 11, leaveEntitlement: 11,
+        birthdayLeaveEntitlement: 0 }
+    ],
+    leaveRequests: [
+      { id: "annual", employeeId: "employee", type: "Annual Leave", status: "approved",
+        startDate: `${year}-01-02`, endDate: `${year}-01-03`, leaveYear: year, days: 2 },
+      { id: "oil", employeeId: "employee", type: "Off-in-Lieu Leave", status: "pending",
+        startDate: `${year}-09-15`, endDate: `${year}-09-15`, days: 0.5 }
+    ],
+    offInLieuAwards: [{ id: "award", employeeId: "employee", days: 1,
+      awardDate: `${year}-01-01`, expiresOn: `${year + 1}-01-01` }],
+    offInLieuAllocations: [{ awardId: "award", leaveRequestId: "oil", days: 0.5 }]
+  });
+  const admin = __test.dashboard(db, db.users[0]);
+  const employee = __test.dashboard(db, db.users[1]);
+  const balances = admin.leaveEntitlementSummaries.find((item) => item.employeeId === "employee");
+  assert.equal(balances.annualLeave.available, 9);
+  assert.equal(balances.annualLeave.available, employee.leaveSummary.available);
+  assert.equal(balances.offInLieu.unreserved, 0.5);
+  assert.equal(db.users[1].leaveEntitlement, 11);
+});
 const { medicalClaimSummary, medicalLeaveSummary } = require("../src/domain");
 
 test("parseMultipartBuffer keeps receipt uploads binary", () => {
