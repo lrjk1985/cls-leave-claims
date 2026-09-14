@@ -236,7 +236,7 @@ function keepOnlyCurrentSession(db, userId, currentToken) {
   for (const [token, session] of sessions.entries()) {
     if (session.userId === userId && token !== currentToken) sessions.delete(token);
   }
-  db.sessions = db.sessions.filter(
+  db.sessions = (db.sessions || []).filter(
     (session) => session.userId !== userId || session.token === currentToken
   );
 }
@@ -1727,10 +1727,8 @@ function getAuthenticatedUser(req, db) {
   pruneMemorySessions();
   const token = parseCookies(req).cls_session;
   if (!token) return null;
-  let session = sessions.get(token);
-  if (!session && Array.isArray(db.sessions)) {
-    session = db.sessions.find((item) => item.token === token);
-  }
+  // Persisted sessions are authoritative across separate server instances.
+  const session = (db.sessions || []).find((item) => item.token === token);
   if (!session || Number(session.expiresAt) < Date.now()) {
     sessions.delete(token);
     return null;
@@ -3874,6 +3872,7 @@ function resetEmployeePassword(db, employeeId, body) {
 
   const temporaryPassword = assertPassword(body.password, "Temporary password");
   setUserPassword(employee, temporaryPassword, "Temporary password");
+  keepOnlyCurrentSession(db, employee.id, null);
   return { employee, temporaryPassword };
 }
 
@@ -5107,8 +5106,10 @@ module.exports = {
     createLeaveRequest,
     createOffInLieuAward,
     dashboard,
+    decideLeaveRequest,
     deliverQueuedEmails,
     ensureAnnualSpecialLeaveEntitlements,
+    getAuthenticatedUser,
     limitSessionsForUser,
     medicalClaimsExport,
     makeLeaveCalendarAttachment,
