@@ -582,6 +582,7 @@ function applyDashboardPatch(patch = {}) {
     "medicalLeaveSummary",
     "medicalClaimSummary",
     "generalClaimSummary",
+    "offInLieuSummary",
     "leaveEntitlementSummaries",
     "leavePolicySettings",
     "receiptStorageSummary",

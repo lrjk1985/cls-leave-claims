@@ -140,6 +140,14 @@ test("leave form includes OIL and accessible half-day duration controls", () => 
   assert.match(cssSource, /\.duration-control\s*\{/);
 });
 
+test("dashboard patches refresh OIL balance after an award", () => {
+  const patchSource = appSource.slice(
+    appSource.indexOf("function applyDashboardPatch"),
+    appSource.indexOf("function markStale")
+  );
+  assert.match(patchSource, /"offInLieuSummary"/);
+});
+
 test("admin directory includes inline OIL award and revoke management", () => {
   assert.match(appSource, /Manage Off-in-Lieu/);
   assert.match(appSource, /Award Off-in-Lieu/);
