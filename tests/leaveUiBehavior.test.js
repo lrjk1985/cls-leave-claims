@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, "..", "public", "app.js"), "
 
 function browser() {
   const context = vm.createContext({
-    FormData,
+    FormData, AbortController,
     document: { querySelector: () => null, addEventListener: () => {} },
     window: { matchMedia: () => ({ matches: true }) },
     // Leave startup session loading pending; these tests supply their own dashboard.
@@ -22,92 +22,29 @@ function browser() {
   return context;
 }
 
-function award(pending = 0, approved = 0, revoked = false) {
-  return { awards: [{ id: "award", days: 1, awardDate: "2026-09-01",
-    expiresOn: "2027-09-01", pending, approved, revoked }] };
-}
-
-function estimate(context, startDate, endDate = startDate, portion = "full") {
-  const message = { dataset: {}, innerHTML: "" };
-  const submit = { disabled: false };
-  const fields = {
-    "[data-leave-estimate]": message,
-    "button[type='submit']": submit,
-    "select[name='type']": { value: "Off-in-Lieu Leave" },
-    "input[name='startDate']": { value: startDate },
-    "input[name='endDate']": { value: endDate },
-    "input[name='dayPortion']:checked": { value: portion }
-  };
-  context.updateLeaveRequestEstimate({ querySelector: (selector) => fields[selector] });
-  return { message, submit };
-}
-
-test("OIL award, reservation, cancellation and revocation patches update submission immediately", () => {
+test("form renders server results and ignores a stale response after a date change", async () => {
   const context = browser();
-  assert.equal(estimate(context, "2026-09-15").submit.disabled, true);
-  context.applyDashboardPatch({ offInLieuSummary: award() });
-  assert.equal(estimate(context, "2026-09-15").submit.disabled, false);
-  context.applyDashboardPatch({ offInLieuSummary: award(0.5) });
-  assert.equal(estimate(context, "2026-09-15").submit.disabled, true);
-  assert.equal(estimate(context, "2026-09-15", "2026-09-15", "morning").submit.disabled, false);
-  context.applyDashboardPatch({ offInLieuSummary: award() });
-  assert.equal(estimate(context, "2026-09-15").submit.disabled, false);
-  context.applyDashboardPatch({ offInLieuSummary: award(0, 0, true) });
-  assert.equal(estimate(context, "2026-09-15").submit.disabled, true);
-});
-
-test("OIL full and half days reject unscheduled weekends but allow weekdays", () => {
-  const context = browser();
-  context.applyDashboardPatch({ offInLieuSummary: award() });
-  for (const portion of ["full", "morning", "afternoon"]) {
-    for (const date of ["2026-09-19", "2026-09-20"]) {
-      const result = estimate(context, date, date, portion);
-      assert.equal(result.submit.disabled, true);
-      assert.equal(result.message.dataset.entitlementBlocked, "true");
-    }
-    assert.equal(estimate(context, "2026-09-15", "2026-09-15", portion).submit.disabled, false);
-  }
-});
-
-test("OIL half days reject multiple dates and expiry is exclusive", () => {
-  const context = browser();
-  context.applyDashboardPatch({ offInLieuSummary: award() });
-  assert.equal(estimate(context, "2026-09-15", "2026-09-16", "morning").submit.disabled, true);
-  assert.equal(estimate(context, "2026-08-31").submit.disabled, true);
-  assert.equal(estimate(context, "2027-08-31").submit.disabled, false);
-  assert.equal(estimate(context, "2027-09-01").submit.disabled, true);
-});
-
-test("medical preview uses the smaller pool and the selected calendar year", () => {
-  const context = browser();
-  vm.runInContext(`state.dashboard.leavePolicySettings = [
-    { leaveType: "Medical Leave", enforcementEnabled: true },
-    { leaveType: "Hospitalization Leave", enforcementEnabled: true }
-  ]; state.dashboard.leaveEntitlementSummaries = [{ employeeId: "employee",
-    medicalHospitalization: { year: 2026, outpatient: { unreserved: 11 }, combined: { unreserved: 0 } },
-    medicalHospitalizationByYear: {
-      2027: { year: 2027, outpatient: { unreserved: 12 }, combined: { unreserved: 58 } }
-    }
-  }];`, context);
-  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2026-11-18").remaining, 0);
-  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2027-01-04").remaining, 12);
-  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2027-01-04").remaining, 58);
-  // Missing year data must defer to the server, not block using another year's balance.
-  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2028-01-04").capped, false);
-});
-
-test("medical preview applies hospitalization overrides only within their dates", () => {
-  const context = browser();
-  vm.runInContext(`state.dashboard.leavePolicySettings = [
-    { leaveType: "Hospitalization Leave", enforcementEnabled: true }
-  ]; state.dashboard.leaveEntitlementSummaries = [{ employeeId: "employee",
-    medicalHospitalization: { year: 2026, combined: {
-      entitlement: 60, balanceAdjustment: -3, approved: 10, pending: 2, unreserved: 45
-    } },
-    entitlements: [{ leaveType: "Hospitalization Leave", periodKind: "annual", periodYear: 2026,
-      active: true, validFrom: "2026-07-01", validUntil: "2026-11-30", baseDays: 40 }]
-  }];`, context);
-  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-06-01").remaining, 45);
-  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-11-18").remaining, 25);
-  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-11-18", "2026-12-01").remaining, 45);
+  const calls = [];
+  context.fetch = (url, options) => new Promise(resolve => calls.push({url, options, resolve}));
+  const estimate = {dataset:{}}, submit = {}, date = {value:"2027-02-08"};
+  const form = {dataset:{}, querySelector: key => ({
+    "[data-leave-estimate]": estimate, "button[type='submit']": submit,
+    "input[name='startDate']": date, "input[name='endDate']": {value:"2027-02-09"},
+    "select[name='type']": {value:"Annual Leave"}
+  })[key]};
+  const stale = context.updateLeaveRequestEstimate(form);
+  date.value = "2027-02-05";
+  const latest = context.updateLeaveRequestEstimate(form);
+  assert.equal(submit.disabled, true);
+  assert.equal(calls[1].url, "/api/leave-preview");
+  assert.equal(JSON.parse(calls[1].options.body).startDate, date.value);
+  calls[1].resolve({ok:true,json:async()=>({data:{days:2,remaining:9,excludedHolidays:[
+    {date:"2027-02-08",name:"Chinese New Year (observed)"}],blocked:""}})});
+  await latest;
+  calls[0].resolve({ok:false,json:async()=>({error:"Stale error"})});
+  await stale;
+  assert.match(estimate.innerHTML, /2 scheduled days/);
+  assert.match(estimate.innerHTML, /Expected remaining: 9/);
+  assert.match(estimate.innerHTML, /Chinese New Year/);
+  assert.equal(submit.disabled, false);
 });

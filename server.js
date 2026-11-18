@@ -3124,6 +3124,9 @@ function assertMedicalCapacity(db, employee, type, year, startDate, endDate, day
   if (days > summary.combined.unreserved) {
     throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved === 1 ? "1 day" : `${summary.combined.unreserved} days`} remaining.`);
   }
+  return (type === LEAVE_TYPES.MEDICAL
+    ? Math.min(summary.outpatient.unreserved, summary.combined.unreserved)
+    : summary.combined.unreserved) - days;
 }
 
 function leaveEntitlementSummaries(db, viewer, options = {}) {
@@ -4007,7 +4010,7 @@ function createLeaveAdjustment(db, actor, body) {
   return adjustment;
 }
 
-async function createLeaveRequest(db, user, body) {
+async function prepareLeaveRequest(db, user, body) {
   if (!user.managerId) {
     throw new Error("No Direct Report / approver has been assigned to your profile yet.");
   }
@@ -4081,47 +4084,53 @@ async function createLeaveRequest(db, user, body) {
     : usesScheduleSnapshot
       ? scheduledDaysBetween(startDate, endDate, workScheduleSnapshot, publicHolidays)
       : breakdown.days;
+  const excludedHolidays = usesCalendarDays ? [] : publicHolidays.filter((holiday) =>
+    (workScheduleSnapshot || [1, 2, 3, 4, 5]).includes(new Date(holiday.date + "T12:00:00Z").getUTCDay() || 7)
+  ).map(({ date, holiday }) => ({ date, name: holiday }));
+  let blocked = "";
+  let remaining = null;
   if (isHalfDay && calculatedDays !== 1) {
-    throw new Error("Half-day leave must use one scheduled working date that is not a Singapore public holiday.");
+    blocked = "Half-day leave must use one scheduled working date that is not a Singapore public holiday.";
   }
-  const days = isHalfDay ? 0.5 : calculatedDays;
+  const days = isHalfDay && calculatedDays === 1 ? 0.5 : calculatedDays;
 
   if (days <= 0) {
-    throw new Error("This date range does not deduct any leave because it only covers weekends or Singapore public holidays.");
+    blocked ||= "This date range does not deduct any leave because it only covers weekends or Singapore public holidays.";
   }
-  if (isMedicalLeave) {
-    if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL)) {
-      assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
-    } else {
-      const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
+  try {
+    if (isMedicalLeave) {
+      if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL)) {
+        remaining = assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
+      } else {
+        const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
+        remaining = summary.unreserved - days;
+        if (days > summary.unreserved) {
+          throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
+        }
+      }
+    } else if (isHospitalizationLeave && policyEnforcementEnabled(db, LEAVE_TYPES.HOSPITALIZATION)) {
+      remaining = assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
+    } else if (isOffInLieu) {
+      // OIL is validated again by the database trigger when Supabase is enabled.
+    } else if (linkedEntitlement) {
+      const summary = entitlementSummary(
+        linkedEntitlement,
+        db.leaveRequests,
+        db.leaveEntitlementAdjustments || []
+      );
+      remaining = summary.unreserved - days;
       if (days > summary.unreserved) {
-        throw new Error(`This medical leave request needs ${days} days, but only ${summary.unreserved} days are available after approved and pending medical leave.`);
+        throw new Error(`This request needs ${days} days, but the ${type} balance has only ${summary.unreserved} day${summary.unreserved === 1 ? "" : "s"} remaining.`);
+      }
+    } else if (!isSpecialLeave) {
+      const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
+      remaining = user.unlimitedAnnualLeave ? null : summary.available - days;
+      if (!user.unlimitedAnnualLeave && days > summary.available) {
+        throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
       }
     }
-  } else if (isHospitalizationLeave && policyEnforcementEnabled(db, LEAVE_TYPES.HOSPITALIZATION)) {
-    assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
-  } else if (isOffInLieu) {
-    // OIL is validated again by the database trigger when Supabase is enabled.
-  } else if (linkedEntitlement) {
-    const summary = entitlementSummary(
-      linkedEntitlement,
-      db.leaveRequests,
-      db.leaveEntitlementAdjustments || []
-    );
-    if (days > summary.unreserved) {
-      throw new Error(`This request needs ${days} days, but the ${type} balance has only ${summary.unreserved} day${summary.unreserved === 1 ? "" : "s"} remaining.`);
-    }
-  } else if (!isSpecialLeave) {
-    const summary = leaveSummary(user, db.leaveRequests, { year: leaveYear });
-    if (!user.unlimitedAnnualLeave && days > summary.available) {
-      throw new Error(`This request needs ${days} days, but only ${summary.available} days are available.`);
-    }
-  }
-  if (needsMedicalCertificate && !body.medicalCertificateUpload && !body.medicalCertificate) {
-    throw new Error(`A Medical Certificate attachment is required for ${type}.`);
-  }
-  if (needsSupportingDocument && !body.supportingDocumentUpload && !body.supportingDocument) {
-    throw new Error("An Official Call-Up Notice attachment is required for National Service Leave.");
+  } catch (error) {
+    blocked ||= error.message;
   }
 
   const createdAt = nowIso();
@@ -4163,14 +4172,34 @@ async function createLeaveRequest(db, user, body) {
       publicHolidays,
       isHalfDay ? 0.5 : 1
     );
-    offInLieuAllocationDrafts = allocateOffInLieu({
-      employeeId: user.id,
-      requestId: request.id,
-      leaveDates,
-      awards: db.offInLieuAwards || [],
-      allocations: db.offInLieuAllocations || [],
-      requests: db.leaveRequests || []
-    });
+    try {
+      offInLieuAllocationDrafts = allocateOffInLieu({
+        employeeId: user.id,
+        requestId: request.id,
+        leaveDates,
+        awards: db.offInLieuAwards || [],
+        allocations: db.offInLieuAllocations || [],
+        requests: db.leaveRequests || []
+      });
+      remaining = offInLieuSummary({employeeId: user.id, asOfDate: endDate, awards: db.offInLieuAwards,
+        allocations: [...(db.offInLieuAllocations || []), ...offInLieuAllocationDrafts],
+        requests: [...db.leaveRequests, request]}).unreserved;
+    } catch (error) { blocked ||= error.message; }
+  }
+  const preview = { days, remaining, excludedHolidays, blocked, usesCalendarDays };
+  return { request, preview, offInLieuAllocationDrafts, needsMedicalCertificate, needsSupportingDocument };
+}
+
+async function createLeaveRequest(db, user, body) {
+  const { request, preview, offInLieuAllocationDrafts, needsMedicalCertificate, needsSupportingDocument } =
+    await prepareLeaveRequest(db, user, body);
+  if (preview.blocked) throw new Error(preview.blocked);
+  const { type, createdAt, dayPortion, days, startDate, endDate } = request;
+  if (needsMedicalCertificate && !body.medicalCertificateUpload && !body.medicalCertificate) {
+    throw new Error(`A Medical Certificate attachment is required for ${type}.`);
+  }
+  if (needsSupportingDocument && !body.supportingDocumentUpload && !body.supportingDocument) {
+    throw new Error("An Official Call-Up Notice attachment is required for National Service Leave.");
   }
 
   if (needsMedicalCertificate) {
@@ -4855,6 +4884,10 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  if (req.method === "POST" && pathname === "/api/leave-preview") {
+    const { preview } = await prepareLeaveRequest(db, user, body);
+    return jsonResponse(res, 200, { data: preview });
+  }
   if (req.method === "POST" && pathname === "/api/leave-requests") {
     const request = await createLeaveRequest(db, user, body);
     addAuditEvent(db, user, {
@@ -5131,6 +5164,7 @@ module.exports = {
     createLeaveAdjustment,
     createLeaveEntitlement,
     createLeaveRequest,
+    prepareLeaveRequest,
     createOffInLieuAward,
     dashboard,
     decideLeaveRequest,

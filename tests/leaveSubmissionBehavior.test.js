@@ -36,6 +36,25 @@ function submit(db, employee, date, dayPortion = "full", endDate = date) {
   });
 }
 
+test("preview excludes the same holiday as submission without reserving leave", async () => {
+  for (const type of ["Annual Leave", "Off-in-Lieu Leave"]) {
+    const {db, employee} = fixture();
+    const body = {type, startDate:"2026-09-15", endDate:"2026-09-16"};
+    const before = JSON.stringify(db);
+    const {preview} = await __test.prepareLeaveRequest(db, employee, body);
+    assert.equal(JSON.stringify(db), before);
+    assert.equal(preview.blocked, "");
+    assert.equal(preview.remaining, type === "Annual Leave" ? 13 : 0);
+    assert.deepEqual(preview.excludedHolidays, [{date:"2026-09-16",name:"Synthetic test holiday"}]);
+    assert.equal(preview.days, 1);
+    assert.equal((await __test.createLeaveRequest(db, employee, body)).days, preview.days);
+    const onlyHoliday = await __test.prepareLeaveRequest(db, employee, {...body,startDate:body.endDate});
+    assert.equal(onlyHoliday.preview.days, 0);
+    assert.match(onlyHoliday.preview.blocked, /holiday/);
+    assert.equal(onlyHoliday.preview.excludedHolidays.length, 1);
+  }
+});
+
 test("full and half-day OIL reject weekends and holidays without reserving balance", async () => {
   for (const portion of ["full", "morning", "afternoon"]) {
     for (const date of ["2026-09-19", "2026-09-20", "2026-09-16"]) {

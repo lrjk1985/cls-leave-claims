@@ -2058,20 +2058,6 @@ function renderOverview() {
   `);
 }
 
-function estimatedLeaveDays(startDate, endDate, schedule, calendarDays = false) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || startDate > endDate) {
-    return null;
-  }
-  const workdays = new Set(schedule || [1, 2, 3, 4, 5]);
-  const start = new Date(`${startDate}T12:00:00Z`);
-  const end = new Date(`${endDate}T12:00:00Z`);
-  let days = 0;
-  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-    const isoWeekday = cursor.getUTCDay() || 7;
-    if (calendarDays || workdays.has(isoWeekday)) days += 1;
-  }
-  return days;
-}
 
 function medicalPoolForDate(bundle, date = todayIso(), endDate = date) {
   const year = Number(date.slice(0, 4));
@@ -2090,159 +2076,48 @@ function medicalPoolForDate(bundle, date = todayIso(), endDate = date) {
     unreserved: Math.max(0, balance - Number(pool.combined.pending || 0)) } };
 }
 
-function leaveRequestBalanceContext(type, startDate, endDate = startDate) {
-  const bundle = employeeEntitlementBundle(state.dashboard.user.id);
-  if (isNationalServiceLeave(type) || type === "Unpaid Leave") {
-    return { capped: false, remaining: null, unavailable: "", entitlement: null };
-  }
-  if (isMedicalLeaveType(type)) {
-    const pool = medicalPoolForDate(bundle, startDate || todayIso(), endDate || startDate || todayIso());
-    if (leavePolicyEnforcementEnabled(type) && !pool) {
-      return { capped: false, remaining: null, unavailable: "", entitlement: null };
-    }
-    const summary = leavePolicyEnforcementEnabled(type)
-      ? pool.outpatient
-      : state.dashboard.medicalLeaveSummary;
-    let remaining = summary?.unreserved ?? Number(summary?.available || 0) - Number(summary?.pending || 0);
-    if (leavePolicyEnforcementEnabled(type)) remaining = Math.min(remaining, pool.combined.unreserved);
-    return { capped: true, remaining, unavailable: "", entitlement: null };
-  }
-  if (type === "Hospitalization Leave") {
-    if (!leavePolicyEnforcementEnabled(type)) return { capped: false, remaining: null, unavailable: "", entitlement: null };
-    const pool = medicalPoolForDate(bundle, startDate || todayIso(), endDate || startDate || todayIso());
-    if (!pool) return { capped: false, remaining: null, unavailable: "", entitlement: null };
-    return {
-      capped: true,
-      remaining: pool.combined.unreserved,
-      unavailable: "",
-      entitlement: null
-    };
-  }
-  if (type === "Off-in-Lieu Leave") {
-    const selectedDate = startDate || todayIso();
-    const awards = (state.dashboard.offInLieuSummary?.awards || [])
-      .filter((award) =>
-        !award.revokedAt && !award.revoked &&
-        award.awardDate <= selectedDate &&
-        selectedDate < award.expiresOn
-      )
-      .map((award) => ({
-        ...award,
-        unreserved: Math.max(
-          0,
-          Number(award.days || 0) - Number(award.approved || 0) - Number(award.pending || 0)
-        )
-      }))
-      .filter((award) => award.unreserved > 0)
-      .sort((left, right) => left.expiresOn.localeCompare(right.expiresOn));
-    const remaining = awards.reduce((total, award) => total + award.unreserved, 0);
-    return {
-      capped: true,
-      remaining,
-      unavailable: startDate && remaining <= 0
-        ? "No Off-in-Lieu award is available for the selected date."
-        : "",
-      entitlement: null,
-      nextExpiry: awards[0]?.expiresOn || null
-    };
-  }
-  if (["Compassionate Leave", "Paternity Leave", "Maternity Leave", "Childcare Leave"].includes(type)) {
-    const entitlement = entitlementForType(bundle, type, startDate);
-    const unavailable = entitlementUnavailableReason(type, entitlement, startDate);
-    if (!leavePolicyEnforcementEnabled(type) && !entitlement) {
-      return { capped: false, remaining: null, unavailable: "", entitlement: null };
-    }
-    return {
-      capped: true,
-      remaining: entitlement?.summary?.unreserved ?? 0,
-      unavailable,
-      entitlement
-    };
-  }
-  if (type === "Annual Leave" || type === "Urgent Leave") {
-    return {
-      capped: !state.dashboard.user.unlimitedAnnualLeave,
-      remaining: state.dashboard.leaveSummary?.available ?? 0,
-      unavailable: "",
-      entitlement: null
-    };
-  }
-  return { capped: false, remaining: null, unavailable: "", entitlement: null };
-}
 
-function updateLeaveRequestEstimate(form) {
+const activeLeavePreviews = new WeakMap();
+
+async function updateLeaveRequestEstimate(form) {
   const estimate = form.querySelector("[data-leave-estimate]");
   const submit = form.querySelector("button[type='submit']");
-  const type = form.querySelector("select[name='type']")?.value || "Annual Leave";
-  const startDate = form.querySelector("input[name='startDate']")?.value || "";
-  const endDate = form.querySelector("input[name='endDate']")?.value || "";
-  const dayPortion = form.querySelector("input[name='dayPortion']:checked")?.value || "full";
-  const isHalfDay = dayPortion !== "full";
   if (!estimate || !submit) return;
-
-  estimate.dataset.entitlementBlocked = "false";
-  submit.disabled = false;
+  activeLeavePreviews.get(form)?.abort();
+  const controller = new AbortController();
+  activeLeavePreviews.set(form, controller);
+  const field = (selector) => form.querySelector(selector)?.value;
+  const startDate = field("input[name='startDate']");
+  const endDate = field("input[name='endDate']");
+  const type = field("select[name='type']");
+  const dayPortion = field("input[name='dayPortion']:checked") || "full";
+  submit.disabled = true;
+  estimate.dataset.entitlementBlocked = "true";
   if (!startDate || !endDate) {
-    estimate.innerHTML = `<strong>Request estimate</strong><span>Choose start and end dates to preview usage.</span>`;
+    estimate.textContent = "Choose start and end dates to preview usage.";
     return;
   }
-  if (startDate > endDate) {
-    estimate.dataset.entitlementBlocked = "true";
-    estimate.innerHTML = `<strong>Unavailable</strong><span>End date must be on or after the start date.</span>`;
-    submit.disabled = true;
-    return;
+  estimate.textContent = "Checking leave days and public holidays...";
+  try {
+    const preview = await api("/api/leave-preview", {
+      method: "POST", signal: controller.signal, body: JSON.stringify({ type, startDate, endDate, dayPortion })
+    });
+    if (controller.signal.aborted) return;
+    const { days, remaining, excludedHolidays, blocked, usesCalendarDays } = preview;
+    const message = blocked && days === 0
+      ? "This will not deduct any leave because you are currently applying for either weekend or Singapore public holidays"
+      : blocked;
+    const unit = usesCalendarDays ? "calendar" : "scheduled";
+    estimate.innerHTML = `<strong>${displayNumber(days)} ${unit} day${days === 1 ? "" : "s"}</strong>
+      ${!blocked ? `<span>Expected remaining: ${remaining === null ? "Not capped" : displayNumber(remaining) + " days"}.</span>` : ""}
+      ${excludedHolidays.length ? `<span>Excluded public holidays: ${excludedHolidays.map((h) =>
+        escapeHtml(dateText(h.date) + " (" + h.name + ")")).join("; ")}.</span>` : ""}
+      ${message ? `<span>${escapeHtml(message)}</span>` : ""}`;
+    estimate.dataset.entitlementBlocked = String(Boolean(blocked));
+    submit.disabled = Boolean(blocked) || form.dataset.submitting === "true";
+  } catch (error) {
+    if (!controller.signal.aborted) estimate.textContent = error.message || "Unable to check leave days.";
   }
-  if (isHalfDay && startDate !== endDate) {
-    estimate.dataset.entitlementBlocked = "true";
-    estimate.innerHTML = `<strong>Unavailable</strong><span>Half-day leave must use a single date.</span>`;
-    submit.disabled = true;
-    return;
-  }
-
-  const context = leaveRequestBalanceContext(type, startDate, endDate);
-  const usesCalendarDays = type === "Maternity Leave" && Boolean(context.entitlement);
-  const usesEmployeeSchedule = isMedicalLeaveType(type) ||
-    type === "Hospitalization Leave" ||
-    type === "Off-in-Lieu Leave" ||
-    isHalfDay ||
-    isNationalServiceLeave(type) ||
-    Boolean(context.entitlement);
-  const schedule = context.entitlement?.workScheduleSnapshot ||
-    (usesEmployeeSchedule ? state.dashboard.user.workSchedule : [1, 2, 3, 4, 5]);
-  const scheduledDays = estimatedLeaveDays(startDate, endDate, schedule, usesCalendarDays);
-  const days = isHalfDay && scheduledDays === 1 ? 0.5 : scheduledDays;
-  let unavailable = context.unavailable;
-  if (!unavailable && isHalfDay && scheduledDays !== 1) {
-    unavailable = "Half-day leave must be on one of your scheduled working days.";
-  }
-  if (!unavailable && !isHalfDay && !usesCalendarDays && scheduledDays === 0) {
-    unavailable = "The selected dates do not include a scheduled working day.";
-  }
-  if (
-    type === "Maternity Leave" &&
-    context.entitlement &&
-    (startDate !== context.entitlement.validFrom || endDate !== context.entitlement.validUntil)
-  ) {
-    unavailable = "Maternity Leave dates must match the verified grant period exactly.";
-  }
-  if (!unavailable && context.capped && Number(days) > Number(context.remaining)) {
-    unavailable = `This estimate exceeds the ${displayNumber(context.remaining)} days currently remaining.`;
-  }
-
-  if (unavailable) {
-    estimate.dataset.entitlementBlocked = "true";
-    estimate.innerHTML = `<strong>Unavailable</strong><span>${escapeHtml(unavailable)}</span>`;
-    submit.disabled = true;
-    return;
-  }
-
-  const remaining = context.capped
-    ? `${displayNumber(Number(context.remaining) - Number(days))} days`
-    : "Not capped";
-  estimate.innerHTML = `
-    <strong>${displayNumber(days)} ${usesCalendarDays ? "calendar" : "scheduled"} day${Number(days) === 1 ? "" : "s"}</strong>
-    <span>Expected remaining: ${escapeHtml(remaining)}.${context.nextExpiry ? ` Next expiry: ${escapeHtml(dateText(context.nextExpiry))}.` : ""} Public holiday exclusions are confirmed when submitted.</span>
-  `;
 }
 
 const HALF_DAY_LEAVE_TYPES = new Set([
@@ -3552,6 +3427,7 @@ document.addEventListener("submit", async (event) => {
         body: leavePayload.body
       });
       form.reset();
+      form.elements.endDate.removeAttribute("min");
       updateMedicalCertificateField(form);
       updateLeaveDurationField(form);
       updateLeaveRequestEstimate(form);
@@ -3956,6 +3832,13 @@ document.addEventListener("change", (event) => {
     "form[data-form='leave'] select[name='type'], form[data-form='leave'] input[name='startDate'], form[data-form='leave'] input[name='endDate'], form[data-form='leave'] input[name='dayPortion']"
   );
   if (leaveField) {
+    if (leaveField.name === "startDate") {
+      const end = leaveField.form.elements.endDate;
+      end.min = leaveField.value;
+      if (leaveField.value && (!end.value || end.value < leaveField.value)) {
+        end.value = leaveField.value;
+      }
+    }
     if (leaveField.name === "type") {
       updateMedicalCertificateField(leaveField.form);
       updateLeaveDurationField(leaveField.form);
