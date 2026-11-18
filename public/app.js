@@ -2073,23 +2073,47 @@ function estimatedLeaveDays(startDate, endDate, schedule, calendarDays = false) 
   return days;
 }
 
-function leaveRequestBalanceContext(type, startDate) {
+function medicalPoolForDate(bundle, date = todayIso(), endDate = date) {
+  const year = Number(date.slice(0, 4));
+  const pool = bundle.medicalHospitalizationByYear?.[year] ||
+    (Number(bundle.medicalHospitalization?.year) === year ? bundle.medicalHospitalization : null);
+  if (!pool || !bundle.entitlements) return pool;
+  const grant = bundle.entitlements.find((item) =>
+    item.leaveType === "Hospitalization Leave" && item.periodKind === "annual" &&
+    Number(item.periodYear) === year && item.active !== false && item.validFrom <= date &&
+    (!item.validUntil || item.validUntil >= endDate)
+  );
+  const entitlement = Number(grant ? grant.overrideDays ?? grant.baseDays : 60);
+  const balance = entitlement + Number(pool.combined.balanceAdjustment || 0) - Number(pool.combined.approved || 0);
+  return { ...pool, combined: { ...pool.combined, entitlement,
+    available: Math.max(0, balance),
+    unreserved: Math.max(0, balance - Number(pool.combined.pending || 0)) } };
+}
+
+function leaveRequestBalanceContext(type, startDate, endDate = startDate) {
   const bundle = employeeEntitlementBundle(state.dashboard.user.id);
   if (isNationalServiceLeave(type) || type === "Unpaid Leave") {
     return { capped: false, remaining: null, unavailable: "", entitlement: null };
   }
   if (isMedicalLeaveType(type)) {
+    const pool = medicalPoolForDate(bundle, startDate || todayIso(), endDate || startDate || todayIso());
+    if (leavePolicyEnforcementEnabled(type) && !pool) {
+      return { capped: false, remaining: null, unavailable: "", entitlement: null };
+    }
     const summary = leavePolicyEnforcementEnabled(type)
-      ? bundle.medicalHospitalization?.outpatient
+      ? pool.outpatient
       : state.dashboard.medicalLeaveSummary;
-    const remaining = summary?.unreserved ?? Number(summary?.available || 0) - Number(summary?.pending || 0);
+    let remaining = summary?.unreserved ?? Number(summary?.available || 0) - Number(summary?.pending || 0);
+    if (leavePolicyEnforcementEnabled(type)) remaining = Math.min(remaining, pool.combined.unreserved);
     return { capped: true, remaining, unavailable: "", entitlement: null };
   }
   if (type === "Hospitalization Leave") {
     if (!leavePolicyEnforcementEnabled(type)) return { capped: false, remaining: null, unavailable: "", entitlement: null };
+    const pool = medicalPoolForDate(bundle, startDate || todayIso(), endDate || startDate || todayIso());
+    if (!pool) return { capped: false, remaining: null, unavailable: "", entitlement: null };
     return {
       capped: true,
-      remaining: bundle.medicalHospitalization?.combined?.unreserved ?? 0,
+      remaining: pool.combined.unreserved,
       unavailable: "",
       entitlement: null
     };
@@ -2175,7 +2199,7 @@ function updateLeaveRequestEstimate(form) {
     return;
   }
 
-  const context = leaveRequestBalanceContext(type, startDate);
+  const context = leaveRequestBalanceContext(type, startDate, endDate);
   const usesCalendarDays = type === "Maternity Leave" && Boolean(context.entitlement);
   const usesEmployeeSchedule = isMedicalLeaveType(type) ||
     type === "Hospitalization Leave" ||
@@ -2549,10 +2573,11 @@ function renderLeaveApprovalContext(item) {
     allocation,
     award: (bundle.offInLieu?.awards || []).find((award) => award.id === allocation.awardId)
   })).filter((entry) => entry.award);
+  const medicalPool = medicalPoolForDate(bundle, item.startDate, item.endDate);
   const pool = medicalType
-    ? bundle.medicalHospitalization?.outpatient
+    ? medicalPool?.outpatient
     : hospitalizationType
-      ? bundle.medicalHospitalization?.combined
+      ? medicalPool?.combined
       : null;
   const summary = entitlement?.summary || pool;
   const balanceAfterApproval = nationalServiceType
@@ -2570,7 +2595,7 @@ function renderLeaveApprovalContext(item) {
   const linkedPeriod = entitlement
     ? `${dateText(entitlement.validFrom)} to ${entitlement.validUntil ? dateText(entitlement.validUntil) : "No expiry"}`
     : pool
-      ? `Calendar year ${bundle.medicalHospitalization?.year || item.leaveYear}`
+      ? `Calendar year ${medicalPool?.year || item.leaveYear}`
       : nationalServiceType
         ? `${dateText(item.startDate)} to ${dateText(item.endDate)}`
         : offInLieuType
@@ -3131,7 +3156,7 @@ function renderEmployees() {
             </label>
             <div class="field">
               <label for="employee-medical-leave-entitlement">Medical Leave Days</label>
-              <input id="employee-medical-leave-entitlement" name="medicalLeaveEntitlement" type="number" min="0" step="0.5" value="14">
+              <input id="employee-medical-leave-entitlement" name="medicalLeaveEntitlement" type="number" min="0" step="0.5" value="14" ${leavePolicyEnforcementEnabled("Medical Leave") ? 'readonly title="Company policy: 14 days per calendar year"' : ""}>
               <div class="field-hint">Initial yearly medical leave entitlement.</div>
             </div>
             <div class="field">
@@ -3221,7 +3246,7 @@ function renderEmployees() {
               </div>
               <div class="field">
                 <label>Medical Leave Days</label>
-                <input data-field="medicalLeaveEntitlement" data-original-value="${displayNumber(employeeMedicalLeaveEntitlement(employee))}" type="number" min="0" step="0.5" value="${displayNumber(employeeMedicalLeaveEntitlement(employee))}">
+                <input data-field="medicalLeaveEntitlement" data-original-value="${displayNumber(employeeMedicalLeaveEntitlement(employee))}" type="number" min="0" step="0.5" value="${displayNumber(employeeMedicalLeaveEntitlement(employee))}" ${leavePolicyEnforcementEnabled("Medical Leave") ? 'readonly title="Company policy: 14 days per calendar year; edit remaining days instead"' : ""}>
               </div>
               <div class="field">
                 <label>Medical Leave Remaining</label>

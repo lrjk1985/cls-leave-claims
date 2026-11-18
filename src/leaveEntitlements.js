@@ -148,15 +148,14 @@ function requestYear(request) {
 function medicalHospitalizationSummary(user, requests = [], options = {}) {
   const asOfDate = options.asOfDate || new Date().toISOString().slice(0, 10);
   const year = Number(options.year || asOfDate.slice(0, 4));
-  const serviceEntitlement = serviceMedicalEntitlement(user.serviceStartDate, asOfDate);
-  const outpatientEntitlement = user.medicalLeaveEntitlementOverride === null ||
-    user.medicalLeaveEntitlementOverride === undefined
-    ? serviceEntitlement.outpatient
-    : Number(user.medicalLeaveEntitlementOverride);
+  // Company policy grants the full annual allowance from day one.
+  const outpatientEntitlement = 14;
   const combinedEntitlement = options.combinedEntitlementOverride === null ||
     options.combinedEntitlementOverride === undefined
-    ? Number(options.combinedEntitlement ?? serviceEntitlement.combined)
+    ? Number(options.combinedEntitlement ?? 60)
     : Number(options.combinedEntitlementOverride);
+  const adjustmentYear = Number(user.medicalLeaveBalanceAdjustmentYear || user.leavePolicyYear || year);
+  const balanceAdjustment = adjustmentYear === year ? Number(user.medicalLeaveBalanceAdjustment || 0) : 0;
   const ownRequests = requests.filter(
     (request) => request.employeeId === user.id && requestYear(request) === year
   );
@@ -172,10 +171,11 @@ function medicalHospitalizationSummary(user, requests = [], options = {}) {
     const pending = sumDays(poolRequests.filter((request) => request.status === "pending"));
     return {
       entitlement,
+      balanceAdjustment,
       approved,
       pending,
-      available: entitlement - approved,
-      unreserved: entitlement - approved - pending
+      available: Math.max(0, entitlement + balanceAdjustment - approved),
+      unreserved: Math.max(0, entitlement + balanceAdjustment - approved - pending)
     };
   }
 

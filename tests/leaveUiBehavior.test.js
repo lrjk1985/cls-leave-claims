@@ -77,3 +77,37 @@ test("OIL half days reject multiple dates and expiry is exclusive", () => {
   assert.equal(estimate(context, "2027-08-31").submit.disabled, false);
   assert.equal(estimate(context, "2027-09-01").submit.disabled, true);
 });
+
+test("medical preview uses the smaller pool and the selected calendar year", () => {
+  const context = browser();
+  vm.runInContext(`state.dashboard.leavePolicySettings = [
+    { leaveType: "Medical Leave", enforcementEnabled: true },
+    { leaveType: "Hospitalization Leave", enforcementEnabled: true }
+  ]; state.dashboard.leaveEntitlementSummaries = [{ employeeId: "employee",
+    medicalHospitalization: { year: 2026, outpatient: { unreserved: 11 }, combined: { unreserved: 0 } },
+    medicalHospitalizationByYear: {
+      2027: { year: 2027, outpatient: { unreserved: 12 }, combined: { unreserved: 58 } }
+    }
+  }];`, context);
+  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2026-11-18").remaining, 0);
+  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2027-01-04").remaining, 12);
+  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2027-01-04").remaining, 58);
+  // Missing year data must defer to the server, not block using another year's balance.
+  assert.equal(context.leaveRequestBalanceContext("Medical Leave", "2028-01-04").capped, false);
+});
+
+test("medical preview applies hospitalization overrides only within their dates", () => {
+  const context = browser();
+  vm.runInContext(`state.dashboard.leavePolicySettings = [
+    { leaveType: "Hospitalization Leave", enforcementEnabled: true }
+  ]; state.dashboard.leaveEntitlementSummaries = [{ employeeId: "employee",
+    medicalHospitalization: { year: 2026, combined: {
+      entitlement: 60, balanceAdjustment: -3, approved: 10, pending: 2, unreserved: 45
+    } },
+    entitlements: [{ leaveType: "Hospitalization Leave", periodKind: "annual", periodYear: 2026,
+      active: true, validFrom: "2026-07-01", validUntil: "2026-11-30", baseDays: 40 }]
+  }];`, context);
+  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-06-01").remaining, 45);
+  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-11-18").remaining, 25);
+  assert.equal(context.leaveRequestBalanceContext("Hospitalization Leave", "2026-11-18", "2026-12-01").remaining, 45);
+});

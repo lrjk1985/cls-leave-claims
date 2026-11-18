@@ -7,6 +7,19 @@ const crypto = require("node:crypto");
 const sqlPath = path.join(__dirname, "..", "supabase", "v2-leave-entitlements.sql");
 const oilSqlPath = path.join(__dirname, "..", "supabase", "v3-off-in-lieu-half-day.sql");
 const cleanInstallSqlPath = path.join(__dirname, "..", "supabase", "v1-rollout.sql");
+const medicalSqlPath = path.join(__dirname, "..", "supabase", "migrations", "20261117022559_fixed_medical_policy.sql");
+
+test("fixed medical guard migration preserves settings and data and is included last for clean installs", () => {
+  const sql = fs.readFileSync(medicalSqlPath, "utf8").trim();
+  const cleanInstall = fs.readFileSync(cleanInstallSqlPath, "utf8");
+  assert.ok(cleanInstall.includes(sql));
+  assert.ok(cleanInstall.lastIndexOf(sql) > cleanInstall.indexOf(fs.readFileSync(oilSqlPath, "utf8").trim()));
+  assert.doesNotMatch(sql, /(?:update|insert into|delete from)\s+public\./i);
+  assert.match(sql, /v_outpatient_cap := 14/);
+  assert.match(sql, /v_combined_cap := 60/);
+  assert.match(sql, /medical_leave_balance_adjustment_year/);
+  assert.doesNotMatch(sql, /v_service_months|v_medical_override/);
+});
 
 test("leave entitlement rollout creates secured additive schema", () => {
   const sql = fs.readFileSync(sqlPath, "utf8");
@@ -103,6 +116,8 @@ test("atomic trigger permits only one request for the final outpatient day", {
           service_start_date: "2025-01-01",
           leave_policy_year: 2026,
           medical_leave_entitlement_override: null,
+          medical_leave_balance_adjustment: 0,
+          medical_leave_balance_adjustment_year: 2026,
           password_salt: "test",
           password_hash: "test"
         },
@@ -114,7 +129,9 @@ test("atomic trigger permits only one request for the final outpatient day", {
           manager_id: managerId,
           service_start_date: "2025-01-01",
           leave_policy_year: 2026,
-          medical_leave_entitlement_override: 1,
+          medical_leave_balance_adjustment: -13,
+          medical_leave_balance_adjustment_year: 2026,
+          medical_leave_entitlement_override: null,
           password_salt: "test",
           password_hash: "test"
         }

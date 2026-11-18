@@ -255,7 +255,8 @@ function publicEmployee(db, employee) {
   if (!employee) return null;
   return {
     ...publicUser(employee),
-    medicalLeaveRemaining: medicalLeaveSummary(employee, db.leaveRequests).available,
+    medicalLeaveEntitlement: employeeMedicalSummary(db, employee).entitlement,
+    medicalLeaveRemaining: employeeMedicalSummary(db, employee).available,
     medicalClaimBalance: medicalClaimSummary(employee, db.medicalClaims).available
   };
 }
@@ -3086,13 +3087,14 @@ function policyEnforcementEnabled(db, type) {
   );
 }
 
-function medicalEnforcementContext(db, employee, year, asOfDate) {
-  const hospitalizationEntitlement = findActiveEntitlement(db.leaveEntitlements || [], {
+function medicalEnforcementContext(db, employee, year, asOfDate, endDate = asOfDate) {
+  const grant = findActiveEntitlement(db.leaveEntitlements || [], {
     employeeId: employee.id,
     leaveType: LEAVE_TYPES.HOSPITALIZATION,
     date: asOfDate,
     year
   });
+  const hospitalizationEntitlement = grant && (!grant.validUntil || grant.validUntil >= endDate) ? grant : null;
   const combinedEntitlementOverride = hospitalizationEntitlement
     ? Number(hospitalizationEntitlement.overrideDays ?? hospitalizationEntitlement.baseDays)
     : undefined;
@@ -3106,6 +3108,24 @@ function medicalEnforcementContext(db, employee, year, asOfDate) {
   };
 }
 
+function employeeMedicalSummary(db, employee, options = {}) {
+  return medicalLeaveSummary(employee, db.leaveRequests, {
+    ...options,
+    ...(policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL)
+      ? { entitlementOverride: ANNUAL_MEDICAL_LEAVE_DAYS } : {})
+  });
+}
+
+function assertMedicalCapacity(db, employee, type, year, startDate, endDate, days) {
+  const { summary } = medicalEnforcementContext(db, employee, year, startDate, endDate);
+  if (type === LEAVE_TYPES.MEDICAL && days > summary.outpatient.unreserved) {
+    throw new Error(`This request needs ${days} days, but the outpatient Medical Leave balance has only ${summary.outpatient.unreserved} day${summary.outpatient.unreserved === 1 ? "" : "s"} remaining.`);
+  }
+  if (days > summary.combined.unreserved) {
+    throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved === 1 ? "1 day" : `${summary.combined.unreserved} days`} remaining.`);
+  }
+}
+
 function leaveEntitlementSummaries(db, viewer, options = {}) {
   const asOfDate = options.asOfDate || formatIsoDate(new Date());
   const year = Number(options.year || asOfDate.slice(0, 4));
@@ -3115,16 +3135,15 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
       const entitlements = (db.leaveEntitlements || []).filter(
         (entitlement) => entitlement.employeeId === employee.id
       );
-      const hospitalizationGrant = entitlements.find(
-        (entitlement) =>
-          entitlement.active !== false &&
-          entitlement.leaveType === LEAVE_TYPES.HOSPITALIZATION &&
-          entitlement.periodKind === "annual" &&
-          Number(entitlement.periodYear) === year
-      );
-      const combinedEntitlementOverride = hospitalizationGrant
-        ? Number(hospitalizationGrant.overrideDays ?? hospitalizationGrant.baseDays)
-        : undefined;
+      const medicalYears = new Set([year, year + 1, ...db.leaveRequests
+        .filter((request) => request.employeeId === employee.id)
+        .map((request) => Number(request.leaveYear || String(request.startDate || "").slice(0, 4)))
+        .filter((requestYear) => requestYear > 0)]);
+      const medicalHospitalizationByYear = Object.fromEntries([...medicalYears].map((poolYear) => [
+        poolYear,
+        medicalEnforcementContext(db, employee, poolYear,
+          poolYear === year ? asOfDate : `${poolYear}-01-01`).summary
+      ]));
       const nationalServiceRequests = db.leaveRequests.filter(
         (request) =>
           request.employeeId === employee.id &&
@@ -3152,11 +3171,8 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
           birthdayLeave: employee.birthdayLeaveEntitlement
         }),
         offInLieu: publicOffInLieuSummary(db, viewer, employee, asOfDate),
-        medicalHospitalization: medicalHospitalizationSummary(employee, db.leaveRequests, {
-          year,
-          asOfDate,
-          combinedEntitlementOverride
-        }),
+        medicalHospitalization: medicalHospitalizationByYear[year],
+        medicalHospitalizationByYear,
         nationalService: {
           year,
           approved: nationalServiceRequests
@@ -3215,7 +3231,7 @@ function dashboard(db, user) {
       adjustments: currentLeaveAdjustments,
       birthdayLeave: user.birthdayLeaveEntitlement
     }),
-    medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
+    medicalLeaveSummary: employeeMedicalSummary(db, user),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
     offInLieuSummary: publicOffInLieuSummary(db, user, user),
@@ -3256,7 +3272,7 @@ function dashboardPatch(db, user) {
       adjustments: currentLeaveAdjustments,
       birthdayLeave: user.birthdayLeaveEntitlement
     }),
-    medicalLeaveSummary: medicalLeaveSummary(user, db.leaveRequests),
+    medicalLeaveSummary: employeeMedicalSummary(db, user),
     medicalClaimSummary: medicalClaimSummary(user, db.medicalClaims),
     generalClaimSummary: generalClaimSummary(user, db.medicalClaims),
     offInLieuSummary: publicOffInLieuSummary(db, user, user),
@@ -3699,6 +3715,9 @@ async function createEmployee(db, body) {
     body.medicalLeaveEntitlement ?? ANNUAL_MEDICAL_LEAVE_DAYS,
     "Medical leave entitlement"
   );
+  if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL) && medicalLeaveEntitlement !== ANNUAL_MEDICAL_LEAVE_DAYS) {
+    throw new Error("Medical leave entitlement is fixed at 14 days under the company policy. Edit remaining days instead.");
+  }
   const password = assertPassword(body.password || "welcome123", "Temporary password");
 
   if (!name) throw new Error("Employee name is required.");
@@ -3767,6 +3786,10 @@ function updateEmployee(db, employeeId, body) {
     const error = new Error("Employee was not found.");
     error.status = 404;
     throw error;
+  }
+  if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL) && body.medicalLeaveEntitlement !== undefined &&
+    Number(body.medicalLeaveEntitlement) !== ANNUAL_MEDICAL_LEAVE_DAYS) {
+    throw new Error("Medical leave entitlement is fixed at 14 days under the company policy. Edit remaining days instead.");
   }
   if (body.name !== undefined) {
     const name = String(body.name).trim();
@@ -3848,7 +3871,7 @@ function updateEmployee(db, employeeId, body) {
   }
   if (body.medicalLeaveRemaining !== undefined) {
     const remaining = normalizeLeaveDays(body.medicalLeaveRemaining, "Medical leave remaining");
-    const summary = medicalLeaveSummary(employee, db.leaveRequests);
+    const summary = employeeMedicalSummary(db, employee);
     employee.medicalLeaveBalanceAdjustment = normalizeSignedLeaveDays(
       remaining + summary.approved - summary.entitlement,
       "Medical leave balance adjustment"
@@ -4068,13 +4091,7 @@ async function createLeaveRequest(db, user, body) {
   }
   if (isMedicalLeave) {
     if (policyEnforcementEnabled(db, LEAVE_TYPES.MEDICAL)) {
-      const { summary } = medicalEnforcementContext(db, user, leaveYear, startDate);
-      if (days > summary.outpatient.unreserved) {
-        throw new Error(`This request needs ${days} days, but the outpatient Medical Leave balance has only ${summary.outpatient.unreserved} day${summary.outpatient.unreserved === 1 ? "" : "s"} remaining.`);
-      }
-      if (days > summary.combined.unreserved) {
-        throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
-      }
+      assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
     } else {
       const summary = medicalLeaveSummary(user, db.leaveRequests, { year: leaveYear });
       if (days > summary.unreserved) {
@@ -4082,10 +4099,7 @@ async function createLeaveRequest(db, user, body) {
       }
     }
   } else if (isHospitalizationLeave && policyEnforcementEnabled(db, LEAVE_TYPES.HOSPITALIZATION)) {
-    const { summary } = medicalEnforcementContext(db, user, leaveYear, startDate);
-    if (days > summary.combined.unreserved) {
-      throw new Error(`This request needs ${days} days, but the combined Medical and Hospitalization balance has only ${summary.combined.unreserved} day${summary.combined.unreserved === 1 ? "" : "s"} remaining.`);
-    }
+    assertMedicalCapacity(db, user, type, leaveYear, startDate, endDate, days);
   } else if (isOffInLieu) {
     // OIL is validated again by the database trigger when Supabase is enabled.
   } else if (linkedEntitlement) {
@@ -4224,6 +4238,15 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
   }
 
   assertDecision(body.status);
+  if (body.status === "approved" &&
+    [LEAVE_TYPES.MEDICAL, LEAVE_TYPES.HOSPITALIZATION].includes(request.type) &&
+    policyEnforcementEnabled(db, request.type)) {
+    const employee = getUser(db, request.employeeId);
+    // Recheck the request once, excluding its existing pending reservation.
+    assertMedicalCapacity({ ...db, leaveRequests: db.leaveRequests.filter((item) => item.id !== request.id) },
+      employee, request.type, Number(request.leaveYear || request.startDate.slice(0, 4)),
+      request.startDate, request.endDate, Number(request.days));
+  }
   if (body.status === "approved" && request.type === LEAVE_TYPES.OFF_IN_LIEU) {
     const allocatedDays = (db.offInLieuAllocations || [])
       .filter((allocation) => allocation.leaveRequestId === request.id)

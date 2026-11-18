@@ -1436,7 +1436,7 @@ test("enabled medical enforcement checks both outpatient and combined pools", as
   }), /combined Medical and Hospitalization balance has only 0 days remaining/);
 });
 
-test("medical override applies and cancelled requests release combined capacity", async (t) => {
+test("fixed medical policy ignores old overrides and cancelled requests release combined capacity", async (t) => {
   const employee = {
     id: "usr_employee",
     name: "Employee",
@@ -1456,7 +1456,7 @@ test("medical override applies and cancelled requests release combined capacity"
       updatedAt: "2026-07-20T00:00:00.000Z"
     }],
     leaveRequests: [
-      { employeeId: employee.id, type: "Medical Leave", status: "approved", days: 14, leaveYear: 2026 },
+      { employeeId: employee.id, type: "Medical Leave", status: "approved", days: 12, leaveYear: 2026 },
       { employeeId: employee.id, type: "Hospitalization Leave", status: "cancelled", days: 46, leaveYear: 2026 }
     ],
     emails: []
@@ -1476,6 +1476,7 @@ test("medical override applies and cancelled requests release combined capacity"
 
   assert.equal(request.days, 2);
   assert.equal(request.status, "pending");
+  assert.equal(__test.dashboard(db, employee).medicalLeaveSummary.entitlement, 14);
 });
 
 test("ensureAnnualSpecialLeaveEntitlements creates idempotent Compassionate and eligible Childcare grants", () => {
