@@ -32,8 +32,17 @@ function formatIsoDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+const singaporeCalendar = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Singapore", year: "numeric", month: "2-digit", day: "2-digit"
+});
+
+function singaporePolicyDate(date = new Date()) {
+  const parts = Object.fromEntries(singaporeCalendar.formatToParts(date).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 function currentLeaveYear(date = new Date()) {
-  return date.getFullYear();
+  return Number(singaporePolicyDate(date).slice(0, 4));
 }
 
 function yearFromIsoDate(value, fieldName = "Date") {
@@ -364,6 +373,7 @@ module.exports = {
   canSeeEmployee,
   completedYearsOfService,
   currentLeaveYear,
+  singaporePolicyDate,
   COUNTING_METHODS,
   decisionLabel,
   formatIsoDate,

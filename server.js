@@ -13,6 +13,7 @@ const {
   canReview,
   canSeeEmployee,
   currentLeaveYear,
+  singaporePolicyDate,
   decisionLabel,
   formatIsoDate,
   generalClaimSummary,
@@ -1428,7 +1429,7 @@ function serviceAnniversariesAfter(serviceStartDate, sinceDate, asOfDate) {
 }
 
 function applyServiceAnniversaryAccrual(db, asOfDate = new Date()) {
-  const accrualDate = formatIsoDate(asOfDate);
+  const accrualDate = singaporePolicyDate(asOfDate);
   const processed = [];
 
   for (const user of db.users) {
@@ -3130,7 +3131,7 @@ function assertMedicalCapacity(db, employee, type, year, startDate, endDate, day
 }
 
 function leaveEntitlementSummaries(db, viewer, options = {}) {
-  const asOfDate = options.asOfDate || formatIsoDate(new Date());
+  const asOfDate = options.asOfDate || singaporePolicyDate();
   const year = Number(options.year || asOfDate.slice(0, 4));
   return db.users
     .filter((employee) => canSeeEmployee(viewer, employee))
@@ -3190,7 +3191,7 @@ function leaveEntitlementSummaries(db, viewer, options = {}) {
     });
 }
 
-function publicOffInLieuSummary(db, viewer, employee, asOfDate = formatIsoDate(new Date())) {
+function publicOffInLieuSummary(db, viewer, employee, asOfDate = singaporePolicyDate()) {
   const summary = offInLieuSummary({
     employeeId: employee.id,
     asOfDate,
