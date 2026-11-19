@@ -551,7 +551,7 @@ function upsertPendingById(list, item) {
   if (!item) return Array.isArray(list) ? list : [];
   const current = Array.isArray(list) ? list : [];
   const withoutItem = current.filter((entry) => entry.id !== item.id);
-  return item.status === "pending" ? [item, ...withoutItem] : withoutItem;
+  return item.status === "pending" || isCancellationForReview(item) ? [item, ...withoutItem] : withoutItem;
 }
 
 function mergeEmployee(employee) {
@@ -1959,7 +1959,7 @@ function renderApprovalPreviewCards(kind, items) {
       ${items.map((item) => `
         <article class="approval-preview-card">
           <div class="approval-preview-main">
-            <span class="employee-request-kind">${isLeave ? "Leave request" : claimTypeLabel(item.claimType)}</span>
+            <span class="employee-request-kind">${isLeave ? (isCancellationForReview(item) ? "Cancellation request" : "Leave request") : claimTypeLabel(item.claimType)}</span>
             <h3>${escapeHtml(employeeName(item.employeeId))}</h3>
             ${isLeave ? `
               <div class="approval-preview-meta">
@@ -1971,7 +1971,7 @@ function renderApprovalPreviewCards(kind, items) {
               ${item.reason ? `<p class="muted">${escapeHtml(item.reason)}</p>` : ""}
               ${excludedDatesText(item)}
               ${renderMedicalCertificateLink(item)}
-              ${renderLeaveApprovalContext(item)}
+              ${isCancellationForReview(item) ? "" : renderLeaveApprovalContext(item)}
             ` : `
               <div class="approval-preview-meta">
                 <span>${dateText(item.claimDate)}</span>
@@ -2017,7 +2017,7 @@ function renderOverview() {
     return;
   }
 
-  const pendingLeaves = state.dashboard.leaveRequests.filter((item) => item.status === "pending" && isReviewer(item));
+  const pendingLeaves = state.dashboard.leaveRequests.filter((item) => (item.status === "pending" || isCancellationForReview(item)) && isReviewer(item));
   const pendingClaims = state.dashboard.medicalClaims.filter((item) => item.status === "pending" && isReviewer(item));
   renderShell(`
     ${renderTopbar("Overview", "Leave balances, pending approvals, and recent activity.")}
@@ -2340,7 +2340,7 @@ function renderClaims() {
 }
 
 function renderApprovals() {
-  const leave = state.dashboard.leaveRequests.filter((item) => item.status === "pending" && isReviewer(item));
+  const leave = state.dashboard.leaveRequests.filter((item) => (item.status === "pending" || isCancellationForReview(item)) && isReviewer(item));
   const claims = state.dashboard.medicalClaims.filter((item) => item.status === "pending" && isReviewer(item));
   renderShell(`
     ${renderTopbar("Approvals", "Pending leave applications and medical claims from employees.")}
@@ -2372,7 +2372,18 @@ function statusPill(status) {
   return `<span class="status ${status}">${statusLabel(status)}</span>`;
 }
 
+function isCancellationForReview(item) {
+  return item.status === "approved" && item.cancellationReview?.state === "pending" &&
+    item.startDate > todayIso() && item.employeeId !== state.dashboard.user.id && isReviewer(item);
+}
+
 function renderDecisionControls(type, item) {
+  if (type === "leave" && isCancellationForReview(item)) {
+    return `<div class="actions">
+      <button class="button primary small" data-action="cancellation-review" data-choice="approve" data-id="${item.id}" data-requested="${escapeHtml(item.cancellationReview.requestedAt)}">Approve cancellation</button>
+      <button class="button reject small" data-action="cancellation-review" data-choice="decline" data-id="${item.id}" data-requested="${escapeHtml(item.cancellationReview.requestedAt)}">Keep booking</button>
+    </div>`;
+  }
   if (item.status !== "pending" || !isReviewer(item)) return "";
   return `
     <div class="decision-box">
@@ -2392,6 +2403,10 @@ function canCancelLeave(item) {
 }
 
 function renderLeaveApplicantControls(item) {
+  if (item.employeeId === state.dashboard.user.id && item.status === "approved" &&
+      item.startDate > todayIso() && item.cancellationReview?.state !== "pending") {
+    return `<button class="button reject small" data-action="cancellation-review" data-choice="request" data-id="${item.id}">Request cancellation</button>`;
+  }
   if (!canCancelLeave(item)) return "";
   return `
     <div class="actions leave-row-actions">
@@ -2530,9 +2545,12 @@ function renderLeaveTable(items, approvalsMode) {
               <td data-label="Type">
                 ${escapeHtml(item.type)}
                 ${renderMedicalCertificateLink(item)}
-                ${approvalsMode ? renderLeaveApprovalContext(item) : ""}
+                ${approvalsMode && !isCancellationForReview(item) ? renderLeaveApprovalContext(item) : ""}
               </td>
-              <td data-label="Status">${statusPill(item.status)}</td>
+              <td data-label="Status">${statusPill(item.status)}
+                ${item.cancellationReview?.state === "pending" ? `<div class="muted">${item.startDate > todayIso() ? "Cancellation awaiting review" : "Cancellation expired; booking kept"}</div>` : ""}
+                ${item.cancellationReview?.state === "declined" ? '<div class="muted">Cancellation declined</div>' : ""}
+              </td>
               <td data-label="${approvalsMode ? "Decision" : "Approver"}">
                 ${approvalsMode ? renderDecisionControls("leave", item) : escapeHtml(employeeName(item.managerId))}
                 ${!approvalsMode ? renderLeaveApplicantControls(item) : ""}
@@ -3587,6 +3605,20 @@ document.addEventListener("click", async (event) => {
       return;
     }
 
+    if (action === "cancellation-review") {
+      const choice = button.dataset.choice;
+      const message = { request: "Request cancellation of this entire booking? Your days stay booked until approval.",
+        approve: "Approve cancellation of this entire booking?", decline: "Decline cancellation and keep this booking?" };
+      if (!window.confirm(message[choice])) return;
+      await withButtonBusy(button, "Saving...", async () => {
+        const data = await api(`/api/leave-requests/${button.dataset.id}/cancellation-review`, {
+          method: "PATCH", body: JSON.stringify({ action: choice, requestedAt: button.dataset.requested })
+        });
+        updateDashboard(data);
+        showToast({ request: "Cancellation requested.", approve: "Booking cancelled.", decline: "Booking kept." }[choice]);
+      });
+      return;
+    }
     if (action === "cancel-leave") {
       if (!window.confirm("Cancel this leave request?")) return;
       await withButtonBusy(button, "Cancelling...", async () => {

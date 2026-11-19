@@ -594,6 +594,7 @@ function leaveRequestToRow(request) {
     decided_at: nullish(request.decidedAt),
     decided_by: nullish(request.decidedBy),
     cancellation_note: request.cancellationNote || "",
+    cancellation_review: request.cancellationReview || null,
     cancelled_at: nullish(request.cancelledAt),
     cancelled_by: nullish(request.cancelledBy)
   };
@@ -624,6 +625,7 @@ function leaveRequestFromRow(row) {
     decidedAt: row.decided_at,
     decidedBy: row.decided_by,
     cancellationNote: row.cancellation_note || "",
+    ...(row.cancellation_review ? { cancellationReview: row.cancellation_review } : {}),
     cancelledAt: row.cancelled_at,
     cancelledBy: row.cancelled_by
   };
@@ -1055,7 +1057,27 @@ async function saveSupabaseDb(db) {
     await deleteSupabaseRows(config, keys);
   }
   for (const [config, rows] of upserts) {
-    await upsertSupabaseRows(config, rows);
+    const ordinary = [];
+    for (const row of rows) {
+      const before = config.field === "leaveRequests" && previous.leaveRequests?.[row.id];
+      if (!before || !row.cancellation_review || JSON.stringify(row.cancellation_review) ===
+        JSON.stringify(JSON.parse(before).cancellation_review)) {
+        ordinary.push(row);
+        continue;
+      }
+      const old = JSON.parse(before);
+      const filter = new URLSearchParams({ id: `eq.${row.id}`, status: "eq.approved", select: "id" });
+      filter.set("cancellation_review", old.cancellation_review ? `eq.${JSON.stringify(old.cancellation_review)}` : "is.null");
+      const response = await supabaseRequest(`/rest/v1/${config.table}?${filter}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+        body: JSON.stringify({ cancellation_review: row.cancellation_review, status: row.status,
+          cancelled_by: row.cancelled_by, cancelled_at: row.cancelled_at, updated_at: row.updated_at })
+      });
+      if (!(await response.json()).length) {
+        throw Object.assign(new Error("This booking changed. Refresh before trying again."), { status: 409 });
+      }
+    }
+    await upsertSupabaseRows(config, ordinary);
   }
 
   const normalizedRowsByField = Object.fromEntries(
@@ -3212,6 +3234,12 @@ function publicOffInLieuSummary(db, viewer, employee, asOfDate = singaporePolicy
   };
 }
 
+function leaveNeedsReview(request, user) {
+  return request.status === "pending" || (request.status === "approved" &&
+    request.cancellationReview?.state === "pending" && request.startDate > singaporePolicyDate() &&
+    request.employeeId !== user.id);
+}
+
 function dashboard(db, user) {
   const employees = db.users.map((employee) => publicEmployee(db, employee));
   const userById = Object.fromEntries(employees.map((employee) => [employee.id, employee]));
@@ -3219,7 +3247,7 @@ function dashboard(db, user) {
   const medicalClaims = visibleMedicalClaims(db, user);
   const leaveYear = Number(user.leavePolicyYear || currentLeaveYear());
   const currentLeaveAdjustments = leaveAdjustmentTotal(db, user.id, leaveYear);
-  const pendingLeaveRequests = leaveRequests.filter((request) => request.status === "pending");
+  const pendingLeaveRequests = leaveRequests.filter((request) => leaveNeedsReview(request, user));
   const pendingMedicalClaims = medicalClaims.filter((claim) => claim.status === "pending");
   const recentEmails = visibleEmails(db, user)
     .slice()
@@ -3251,7 +3279,7 @@ function dashboard(db, user) {
       .map((employee) => publicEmployee(db, employee)),
     counts: {
       pendingLeave: pendingLeaveRequests.filter(
-        (request) => request.status === "pending" && canReview(user, request)
+        (request) => canReview(user, request)
       ).length,
       pendingClaims: pendingMedicalClaims.filter(
         (claim) => claim.status === "pending" && canReview(user, claim)
@@ -3263,7 +3291,7 @@ function dashboard(db, user) {
 function dashboardPatch(db, user) {
   const leaveYear = Number(user.leavePolicyYear || currentLeaveYear());
   const currentLeaveAdjustments = leaveAdjustmentTotal(db, user.id, leaveYear);
-  const pendingLeaveRequests = visibleLeaveRequests(db, user).filter((request) => request.status === "pending");
+  const pendingLeaveRequests = visibleLeaveRequests(db, user).filter((request) => leaveNeedsReview(request, user));
   const pendingMedicalClaims = visibleMedicalClaims(db, user).filter((claim) => claim.status === "pending");
   const recentEmails = visibleEmails(db, user)
     .slice()
@@ -3287,7 +3315,7 @@ function dashboardPatch(db, user) {
     emails: recentEmails,
     counts: {
       pendingLeave: pendingLeaveRequests.filter(
-        (request) => request.status === "pending" && canReview(user, request)
+        (request) => canReview(user, request)
       ).length,
       pendingClaims: pendingMedicalClaims.filter(
         (claim) => claim.status === "pending" && canReview(user, claim)
@@ -4322,6 +4350,43 @@ async function decideLeaveRequest(db, reviewer, requestId, body) {
   return request;
 }
 
+function changeApprovedCancellation(db, user, id, action, now = new Date()) {
+  const request = db.leaveRequests.find((r) => r.id === id);
+  if (!request) throw Object.assign(new Error("Booking not found."), { status: 404 });
+  const applying = action === "request";
+  if (!["request", "approve", "decline"].includes(action)) throw new Error("Unknown cancellation action.");
+  if (applying ? user.id !== request.employeeId : user.id === request.employeeId || !canReview(user, request)) {
+    throw Object.assign(new Error("You cannot take this action on this booking."), { status: 403 });
+  }
+  if (request.status !== "approved" || request.startDate <= singaporePolicyDate(now)) {
+    throw new Error("Cancellation is only available before the approved booking starts (Singapore time).");
+  }
+  const previous = request.cancellationReview;
+  if (applying ? previous?.state === "pending" : previous?.state !== "pending") {
+    throw new Error("This cancellation is no longer awaiting that action.");
+  }
+  const at = now.toISOString();
+  request.cancellationReview = applying
+    ? { state: "pending", requestedBy: user.id, requestedAt: at }
+    : { ...previous, state: action === "approve" ? "accepted" : "declined", reviewedBy: user.id, reviewedAt: at };
+  if (action === "approve") {
+    request.status = "cancelled";
+    request.cancelledAt = at;
+    request.cancelledBy = user.id;
+  }
+  request.updatedAt = at;
+  const label = applying ? "requested" : request.cancellationReview.state;
+  const summary = `${user.name}: cancellation ${label} for ${request.startDate} to ${request.endDate}.`;
+  addAuditEvent(db, user, { action: `leave.cancellation.${label}`, relatedType: "leave",
+    relatedId: id, affectedUserId: request.employeeId, summary });
+  const employee = getUser(db, request.employeeId);
+  addEmail(db, { recipientId: applying ? request.managerId : request.employeeId,
+    type: "leave_cancellation_review", subject: `Leave cancellation ${label}`, body: summary, relatedId: id },
+  { attachments: action === "approve" && employee
+    ? [makeLeaveCalendarAttachment({ request, employee, reviewer: user, status: "CANCELLED" })] : [] });
+  return request;
+}
+
 async function cancelLeaveRequest(db, user, requestId, body = {}, options = {}) {
   const request = db.leaveRequests.find((item) => item.id === requestId);
   if (!request) {
@@ -4919,6 +4984,17 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  const cancellationReviewMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/cancellation-review$/);
+  if (cancellationReviewMatch && req.method === "PATCH") {
+    if (body.action !== "request" && (!body.requestedAt ||
+        db.leaveRequests.find((r) => r.id === cancellationReviewMatch[1])?.cancellationReview?.requestedAt !== body.requestedAt)) {
+      throw Object.assign(new Error("This cancellation request has changed. Refresh to review it."), { status: 409 });
+    }
+    const request = changeApprovedCancellation(db, user, cancellationReviewMatch[1], body.action);
+    await saveDbAndDeliverQueuedEmails(db);
+    return jsonResponse(res, 200, { data: { request, patch: dashboardPatch(db, user),
+      stale: { history: ["leave"], mail: true, audit: true } } });
+  }
   const leaveCancelMatch = pathname.match(/^\/api\/leave-requests\/([^/]+)\/cancel$/);
   if (leaveCancelMatch && req.method === "PATCH") {
     const { request, previousStatus } = await cancelLeaveRequest(db, user, leaveCancelMatch[1], body);
@@ -5123,10 +5199,19 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+let localCancellationQueue = Promise.resolve();
+
 async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     if (url.pathname.startsWith("/api/")) {
+      // The local JSON store has no database row lock. Read the latest booking
+      // only after the preceding cancellation decision has been persisted.
+      if (!isSupabaseEnabled() && req.method === "PATCH" && url.pathname.endsWith("/cancellation-review")) {
+        const result = localCancellationQueue.then(() => handleApi(req, res, url.pathname));
+        localCancellationQueue = result.catch(() => {});
+        return await result;
+      }
       return await handleApi(req, res, url.pathname);
     }
     return await serveStatic(req, res, url.pathname);
@@ -5160,6 +5245,7 @@ module.exports = {
     auditPage,
     canViewLeaveDocument,
     cancelLeaveRequest,
+    changeApprovedCancellation,
     createClaim,
     createEntitlementAdjustment,
     createLeaveAdjustment,
