@@ -22,6 +22,21 @@ function browser() {
   return context;
 }
 
+test("cancellation deadline is the last Singapore minute before the start date", () => {
+  const context = browser();
+  assert.match(context.cancellationDeadline("2027-01-01"), /31 Dec 2026.*11:59 pm Singapore time/);
+});
+
+test("expiry notice groups only active unreserved days expiring within 30 days", () => {
+  const context = browser();
+  const award = {active:true,unreserved:0.5,expiresOn:"2027-01-01"};
+  const awards = [award, award, {...award,unreserved:0}, {...award,active:false},
+    {...award,expiresOn:"2027-01-02"}, {...award,expiresOn:"2026-12-02"}];
+  assert.match(context.renderExpiryNotice(awards,"2026-12-02"), /1 day of Off-in-Lieu.*31 Dec 2026/);
+  assert.equal(context.renderExpiryNotice([award],"2026-12-01"), "");
+  assert.equal(context.renderExpiryNotice([award],"2027-01-01"), "");
+});
+
 test("form renders server results and ignores a stale response after a date change", async () => {
   const context = browser();
   const calls = [];

@@ -303,6 +303,33 @@ function addIsoDays(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function lastUsableDate(exclusiveDate) {
+  const last = addIsoDays(exclusiveDate, -1);
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone: "Asia/Singapore", day: "numeric", month: "short", year: "numeric"
+  }).format(new Date(last + "T00:00:00Z"));
+}
+
+function cancellationDeadline(startDate) {
+  return `Cancellation must be approved by ${lastUsableDate(startDate)}, 11:59 pm Singapore time. Otherwise the booking stays in place.`;
+}
+
+function renderExpiryNotice(awards = state.dashboard.offInLieuSummary?.awards || [], today = todayIso()) {
+  const cutoff = addIsoDays(today, 30);
+  const byExpiry = new Map();
+  for (const award of awards) {
+    if (!award.active || !(award.unreserved > 0) || award.expiresOn <= today || award.expiresOn > cutoff) continue;
+    byExpiry.set(award.expiresOn, (byExpiry.get(award.expiresOn) || 0) + Number(award.unreserved));
+  }
+  if (!byExpiry.size) return "";
+  return `<aside class="oil-expiry-notice" aria-label="Off-in-Lieu expiring soon">
+    <strong>Off-in-Lieu expiring soon</strong>
+    ${[...byExpiry.keys()].sort().map(expiry => {
+      const days = byExpiry.get(expiry);
+      return `<div>You have ${days} ${days === 1 ? "day" : "days"} of Off-in-Lieu to use by ${lastUsableDate(expiry)}.</div>`;
+    }).join("")}</aside>`;
+}
+
 function currentYearText() {
   return String(new Date().getFullYear());
 }
@@ -1999,6 +2026,7 @@ function renderEmployeeOverview() {
     ${renderTopbar("Overview", "Your leave, medical leave, and claims in one calm view.")}
     <div class="content-grid">
       ${renderEmployeeLeaveHero()}
+      ${renderExpiryNotice()}
       ${renderEmployeeBalanceRings()}
       ${renderEmployeeRecentRequests()}
       <section class="section">
@@ -2024,6 +2052,7 @@ function renderOverview() {
     ${renderTopbar("Overview", "Leave balances, pending approvals, and recent activity.")}
     <div class="content-grid">
       ${renderManagementOverviewHero(pendingLeaves, pendingClaims)}
+      ${renderExpiryNotice()}
       ${renderManagementOverviewRings(pendingLeaves, pendingClaims)}
       ${renderAdminReceiptStorage()}
       <div class="split">
@@ -2150,6 +2179,7 @@ function renderLeave() {
     ${renderTopbar("Leave", "Apply for leave and track your leave request history.")}
     <div class="content-grid">
       ${renderLeavePageRings()}
+      ${renderExpiryNotice()}
       ${renderEmployeeEntitlementSummaries()}
       <section class="section feature-form-card">
         <div class="section-header">
@@ -2380,7 +2410,7 @@ function isCancellationForReview(item) {
 
 function renderDecisionControls(type, item) {
   if (type === "leave" && isCancellationForReview(item)) {
-    return `<div class="actions">
+    return `<p class="muted">${cancellationDeadline(item.startDate)}</p><div class="actions">
       <button class="button primary small" data-action="cancellation-review" data-choice="approve" data-id="${item.id}" data-requested="${escapeHtml(item.cancellationReview.requestedAt)}">Approve cancellation</button>
       <button class="button reject small" data-action="cancellation-review" data-choice="decline" data-id="${item.id}" data-requested="${escapeHtml(item.cancellationReview.requestedAt)}">Keep booking</button>
     </div>`;
@@ -2404,9 +2434,10 @@ function canCancelLeave(item) {
 }
 
 function renderLeaveApplicantControls(item) {
-  if (item.employeeId === state.dashboard.user.id && item.status === "approved" &&
-      item.startDate > todayIso() && item.cancellationReview?.state !== "pending") {
-    return `<button class="button reject small" data-action="cancellation-review" data-choice="request" data-id="${item.id}">Request cancellation</button>`;
+  if (item.employeeId === state.dashboard.user.id && item.status === "approved" && item.startDate > todayIso()) {
+    const deadline = `<p class="muted">${cancellationDeadline(item.startDate)}</p>`;
+    if (item.cancellationReview?.state === "pending") return deadline;
+    return `${deadline}<button class="button reject small" data-action="cancellation-review" data-choice="request" data-start="${escapeHtml(item.startDate)}" data-id="${item.id}">Request cancellation</button>`;
   }
   if (!canCancelLeave(item)) return "";
   return `
@@ -3666,7 +3697,7 @@ document.addEventListener("click", async (event) => {
 
     if (action === "cancellation-review") {
       const choice = button.dataset.choice;
-      const message = { request: "Request cancellation of this entire booking? Your days stay booked until approval.",
+      const message = { request: choice === "request" ? `Request cancellation of this entire booking? ${cancellationDeadline(button.dataset.start)}` : "",
         approve: "Approve cancellation of this entire booking?", decline: "Decline cancellation and keep this booking?" };
       if (!window.confirm(message[choice])) return;
       await withButtonBusy(button, "Saving...", async () => {
