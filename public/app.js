@@ -1253,6 +1253,7 @@ function renderShell(content) {
         <nav class="nav-list">
           ${renderNavButton("overview", "Overview")}
           ${renderNavButton("leave", "Leave")}
+          ${renderNavButton("team-calendar", "Team Calendar")}
           ${renderNavButton("claims", "Claims")}
           ${(approvals || user.role !== "employee") ? renderNavButton("approvals", "Approvals", approvals || "") : ""}
           ${isAdmin() ? renderNavButton("employees", "Employees") : ""}
@@ -3373,8 +3374,66 @@ function renderAccount() {
   `);
 }
 
+function renderTeamCalendar() {
+  renderShell(`${renderTopbar("Team Calendar", "Approved team absences")}
+    <section class="team-calendar" aria-labelledby="calendar-month">
+      <header class="calendar-bar"><h2 id="calendar-month" aria-live="polite"></h2>
+        <div class="actions"><button class="button small" data-month="-1" aria-label="Previous month" title="Previous month">&#8249;</button>
+        <button class="button small" data-month="today">Today</button>
+        <button class="button small" data-month="1" aria-label="Next month" title="Next month">&#8250;</button></div>
+      </header><div class="calendar-body" aria-live="polite"></div>
+    </section>`);
+  const panel = app.querySelector(".team-calendar");
+  const body = panel.querySelector(".calendar-body");
+  let month = todayIso().slice(0, 7);
+  let version = 0;
+  async function load() {
+    const current = ++version;
+    const first = new Date(month + "-01T12:00:00Z");
+    const format = (date, options) => date.toLocaleDateString("en-SG", { ...options, timeZone: "UTC" });
+    panel.querySelector("h2").textContent = format(first, { month: "long", year: "numeric" });
+    body.innerHTML = renderLoadingState("Loading calendar");
+    try {
+      const entries = await api("/api/team-calendar?month=" + month);
+      if (current !== version || !panel.isConnected) return;
+      const cells = [];
+      for (let i = 0; i < (first.getUTCDay() + 6) % 7; i++) cells.push('<li class="cal-pad" aria-hidden="true"></li>');
+      const today = todayIso();
+      for (const d = new Date(first); d.getUTCMonth() === first.getUTCMonth(); d.setUTCDate(d.getUTCDate() + 1)) {
+        const date = d.toISOString().slice(0, 10);
+        const absences = entries.filter(e => e.date === date);
+        const label = format(d, { weekday: "short", day: "numeric", month: "short" });
+        cells.push(`<li class="cal-day${absences.length ? " occupied" : ""}">
+          <time datetime="${date}" aria-label="${label}" ${date === today ? 'aria-current="date"' : ""}>
+          <span class="cal-number">${d.getUTCDate()}</span><span class="cal-mobile">${label}</span></time>
+          ${absences.map(e => `<div class="cal-entry"><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(e.portion)}</span></div>`).join("")}</li>`);
+      }
+      body.innerHTML = `<div class="cal-week" aria-hidden="true">${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(s => "<span>" + s + "</span>").join("")}</div>
+        <ol class="cal-days" aria-label="Team availability">${cells.join("")}</ol>
+        ${entries.length ? "" : '<p class="empty">No approved absences this month.</p>'}`;
+    } catch {
+      if (current !== version || !panel.isConnected) return;
+      body.innerHTML = '<p class="empty">The calendar could not be loaded. <button class="button small" data-month="retry">Retry</button></p>';
+    }
+  }
+  panel.onclick = event => {
+    const button = event.target.closest("[data-month]");
+    if (!button) return;
+    const move = button.dataset.month;
+    if (move === "today") month = todayIso().slice(0, 7);
+    else if (move !== "retry") {
+      const d = new Date(month + "-01T12:00:00Z");
+      d.setUTCMonth(d.getUTCMonth() + Number(move));
+      month = d.toISOString().slice(0, 7);
+    }
+    load();
+  };
+  load();
+}
+
 function render() {
   if (!state.dashboard) return renderLogin();
+  if (state.activeTab === "team-calendar") return renderTeamCalendar();
   if (state.activeTab === "leave") return renderLeave();
   if (state.activeTab === "claims") return renderClaims();
   if (state.activeTab === "approvals") return renderApprovals();

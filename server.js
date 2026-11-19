@@ -1,4 +1,5 @@
 const crypto = require("node:crypto");
+const { teamCalendar } = require("./src/teamCalendar");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
@@ -4723,6 +4724,10 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  if (req.method === "GET" && pathname === "/api/team-calendar") {
+    res.setHeader("Cache-Control", "private, no-store");
+    return jsonResponse(res, 200, { data: await teamCalendar(db, searchParams.get("month")) });
+  }
   if (req.method === "GET" && pathname === "/api/dashboard") {
     return jsonResponse(res, 200, { data: dashboard(db, user) });
   }

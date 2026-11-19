@@ -37,6 +37,27 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.team-calendar { background:var(--paper); border:1px solid var(--line); min-width:0; }
+.calendar-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:12px 16px; }
+.calendar-bar h2 { margin:0; font-size:20px; }
+.calendar-bar button { min-width:44px; min-height:44px; }
+.cal-days,.cal-week { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); margin:0; padding:0; list-style:none; }
+.cal-week { border-top:1px solid var(--line); color:var(--muted); }
+.cal-week span,.cal-day { padding:8px; }
+.cal-day,.cal-pad { border-top:1px solid var(--line); border-inline-end:1px solid var(--line); min-height:90px; }
+.cal-day time { font-weight:600; }
+.cal-day time[aria-current] { color:var(--primary-dark); text-decoration:underline; }
+.cal-entry { background:var(--primary-soft); border-left:2px solid var(--primary); margin-top:5px; padding:4px 6px; overflow-wrap:anywhere; }
+.cal-entry span { display:block; font-size:12px; }
+.cal-mobile { display:none; }
+@media(max-width:720px) {
+  .cal-week,.cal-pad,.cal-day:not(.occupied),.cal-number { display:none; }
+  .cal-mobile { display:inline; }
+  .cal-days { display:block; }
+  .cal-day { min-height:0; padding:10px 14px; border-right:none; }
+  .cal-entry { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+}
+
 * {
   box-sizing: border-box;
 }
