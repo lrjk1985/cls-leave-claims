@@ -751,7 +751,12 @@ async function loadHistory(kind, options = {}) {
     if (filters.requestId === requestId && filters.requestKey === key) {
       filters.loading = false;
       filters.requestKey = "";
-      render();
+      if (kind === "leave") {
+        const section = app.querySelector("#leave-history-section");
+        if (section) section.outerHTML = renderHistorySection(kind);
+      } else {
+        render();
+      }
     }
   }
 }
@@ -923,7 +928,7 @@ function renderHistorySection(kind) {
   const remaining = Math.max(0, Number(filters.total || 0) - items.length);
 
   return `
-    <section class="section">
+    <section class="section" id="${kind}-history-section">
       <div class="section-header history-header">
         ${renderHistoryFilters(kind)}
       </div>
@@ -1249,7 +1254,7 @@ function renderLogin() {
 
 function renderNavButton(id, label, badge = "") {
   return `
-    <button class="nav-button ${state.activeTab === id ? "active" : ""}" data-action="tab" data-tab="${id}">
+    <button class="nav-button ${state.activeTab === id ? "active" : ""}" ${state.activeTab === id ? 'aria-current="page"' : ""} data-action="tab" data-tab="${id}">
       <span>${label}</span>
       ${badge ? `<span class="badge">${badge}</span>` : ""}
     </button>
@@ -1260,6 +1265,7 @@ function renderShell(content) {
   const { user } = state.dashboard;
   const approvals = pendingApprovalCount();
   const viewChanged = lastRenderedTab !== state.activeTab;
+  const keepMenuOpen = !viewChanged && app.querySelector(".mobile-menu-button")?.getAttribute("aria-expanded") === "true";
   lastRenderedTab = state.activeTab;
   if (!state.sidebarQuote) state.sidebarQuote = randomQuote();
   app.innerHTML = `
@@ -1270,8 +1276,12 @@ function renderShell(content) {
           <div>
             <div class="brand-title">Leave & Claims</div>
             <div class="brand-subtitle">Company portal</div>
+            <div class="mobile-section-name"></div>
           </div>
+          <button type="button" class="button small mobile-menu-button" data-action="mobile-menu"
+            aria-controls="sidebar-navigation" aria-expanded="${Boolean(keepMenuOpen)}"><span aria-hidden="true">&#9776;</span> Menu</button>
         </div>
+        <div id="sidebar-navigation" class="sidebar-navigation">
         <div class="profile-strip">
           <div class="profile-name">${escapeHtml(user.name)}</div>
           <div class="profile-email">${escapeHtml(user.email)}</div>
@@ -1290,6 +1300,7 @@ function renderShell(content) {
         </nav>
         ${renderQuote(state.sidebarQuote, "sidebar-quote")}
         <button class="button ghost" data-action="logout">Sign out</button>
+        </div>
       </aside>
       <main class="main">
         ${content}
@@ -1298,6 +1309,7 @@ function renderShell(content) {
     ${renderPasswordResetDialog()}
     ${renderLeaveAdjustmentDialog()}
   `;
+  app.querySelector(".mobile-section-name").textContent = app.querySelector('.nav-button.active span')?.textContent || "";
   runPostRenderMotion({ viewChanged });
 }
 
@@ -1688,13 +1700,8 @@ function renderEmployeeEntitlementSummaries() {
   const bundle = employeeEntitlementBundle(state.dashboard.user.id);
   const medical = bundle.medicalHospitalization;
   return `
-    <section class="section employee-entitlement-summary" aria-labelledby="special-entitlements-title">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title" id="special-entitlements-title">Special Leave Entitlements</h2>
-          <p class="page-kicker">These balances are tracked separately from annual leave.</p>
-        </div>
-      </div>
+    <details class="section employee-entitlement-summary">
+      <summary class="entitlement-toggle">Special Leave Entitlements</summary>
       <div class="employee-entitlement-list">
         ${EMPLOYEE_ENTITLEMENT_TYPES.map((type) => {
           if (type === "Off-in-Lieu Leave") {
@@ -1770,7 +1777,7 @@ function renderEmployeeEntitlementSummaries() {
           `;
         }).join("")}
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2161,7 +2168,6 @@ function renderLeave() {
     <div class="content-grid">
       ${renderLeavePageRings()}
       ${renderExpiryNotice()}
-      ${renderEmployeeEntitlementSummaries()}
       <section class="section feature-form-card">
         <div class="section-header">
           <div>
@@ -2235,6 +2241,7 @@ function renderLeave() {
           </form>
         </div>
       </section>
+      ${renderEmployeeEntitlementSummaries()}
       <section class="section">
         <div class="section-header">
           <h2 class="section-title">Pending Leave Applications</h2>
@@ -3639,9 +3646,17 @@ document.addEventListener("click", async (event) => {
   const action = button.dataset.action;
 
   try {
+    if (action === "mobile-menu") {
+      button.setAttribute("aria-expanded", String(button.getAttribute("aria-expanded") !== "true"));
+      return;
+    }
     if (action === "tab") {
+      const mobileButton = app.querySelector(".mobile-menu-button");
+      const fromMobileMenu = button.closest(".sidebar-navigation") && mobileButton?.offsetWidth;
+      mobileButton?.setAttribute("aria-expanded", "false");
       state.activeTab = button.dataset.tab;
       render();
+      if (fromMobileMenu) app.querySelector(".mobile-menu-button")?.focus();
       return;
     }
 
@@ -3859,6 +3874,14 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("keydown", async (event) => {
+  if (event.key === "Escape" && !app.querySelector(".modal-backdrop")) {
+    const menu = app.querySelector('.mobile-menu-button[aria-expanded="true"]');
+    if (menu?.offsetWidth) {
+      menu.setAttribute("aria-expanded", "false");
+      menu.focus();
+      return;
+    }
+  }
   if (event.key !== "Escape" || !app.querySelector(".modal-backdrop")) return;
   await animateDialogClose();
   state.passwordReset = { employeeId: null };
