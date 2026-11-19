@@ -22,6 +22,20 @@ function browser() {
   return context;
 }
 
+test("employee balance cards lead with days and keep approvals separate from pending", () => {
+  const c = browser();
+  vm.runInContext("state.dashboard.leaveSummary = {available:14,entitlement:16,approved:2,pending:0.5}", c);
+  for (const html of [c.renderEmployeeBalanceRings(), c.renderLeavePageRings()]) {
+    assert.match(html, /14 days left/);
+    assert.match(html, /16 days total/);
+  }
+  assert.match(c.renderLeavePageRings(), /0.5 days pending/);
+  assert.match(c.renderLeavePageRings(), /2 days approved/);
+  vm.runInContext("state.dashboard.user.unlimitedAnnualLeave = true", c);
+  assert.match(c.renderLeavePageRings(), /Unlimited/);
+  assert.doesNotMatch(c.renderLeavePageRings(), /16 days total/);
+});
+
 test("cancellation deadline is the last Singapore minute before the start date", () => {
   const context = browser();
   assert.match(context.cancellationDeadline("2027-01-01"), /31 Dec 2026.*11:59 pm Singapore time/);

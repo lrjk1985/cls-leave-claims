@@ -587,6 +587,13 @@ textarea {
   margin: 5px 0 0;
 }
 
+.leave-balance-headline {
+  display:block;
+  margin-top:4px;
+  font-size:20px;
+  line-height:1.2;
+}
+
 .feature-form-card {
   overflow: hidden;
   border-color: rgba(255, 255, 255, 0.08);

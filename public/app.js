@@ -1442,16 +1442,16 @@ function renderEmployeeLeaveHero() {
   if (user.role !== "employee" || !summary) return "";
 
   const isUnlimited = Boolean(user.unlimitedAnnualLeave);
-  const availableLabel = annualLeaveDisplay(summary.available);
+  const availableLabel = isUnlimited ? "Unlimited" : daysLabel(summary.available);
   const helperText = isUnlimited
     ? "Annual and urgent leave can be requested without a balance limit."
-    : "Working days ready to use.";
+    : "After approved leave. Pending requests are shown separately.";
 
   return `
     <section class="employee-leave-hero">
       <div class="employee-leave-hero-content">
         <div>
-          <div class="employee-leave-kicker">Available annual leave</div>
+          <div class="employee-leave-kicker">Annual leave left</div>
           <div class="employee-leave-value">${availableLabel}</div>
           <p>${helperText}</p>
         </div>
@@ -1469,8 +1469,8 @@ function renderEmployeeLeaveHero() {
             <span>Birthday leave</span>
           </div>
           <div class="employee-leave-stat">
-            <strong>${summary.approved} / ${summary.pending}</strong>
-            <span>Taken / pending</span>
+            <strong>${daysLabel(summary.pending)} pending</strong>
+            <span>${daysLabel(summary.approved)} approved</span>
           </div>
         </div>
       </div>
@@ -1490,6 +1490,19 @@ function displayNumber(value) {
   return String(Math.round(number * 100) / 100);
 }
 
+function daysLabel(value) {
+  return `${displayNumber(value)} ${Number(value) === 1 ? "day" : "days"}`;
+}
+
+function leaveBalanceCard(title, summary, gradient, unlimited = false) {
+  const percent = unlimited ? 100 : percentage(summary.available, summary.entitlement);
+  return featureRingCard({
+    title, gradient, percent, value: unlimited ? "∞" : `${percent}%`,
+    headline: unlimited ? "Unlimited" : `${daysLabel(summary.available)} left`,
+    text: unlimited ? "No annual limit" : `${daysLabel(summary.entitlement)} total`
+  });
+}
+
 function renderEmployeeBalanceRings() {
   const summary = state.dashboard.leaveSummary;
   const medicalSummary = state.dashboard.medicalLeaveSummary || {
@@ -1504,32 +1517,12 @@ function renderEmployeeBalanceRings() {
     pending: 0,
     approved: 0
   };
-  const annualPercent = state.dashboard.user.unlimitedAnnualLeave
-    ? 100
-    : percentage(summary.available, summary.entitlement);
-  const medicalPercent = percentage(medicalSummary.available, medicalSummary.entitlement);
   const claimPercent = percentage(claimSummary.available, claimSummary.limit);
 
   return `
     <section class="employee-balance-grid">
-      <article class="employee-ring-card">
-        <div class="employee-ring" style="--value: ${annualPercent}%; --ring-gradient: #ff5fc8, #5d7cfa;">
-          <strong>${state.dashboard.user.unlimitedAnnualLeave ? "Open" : `${annualPercent}%`}</strong>
-        </div>
-        <div>
-          <h2>Annual Leave</h2>
-          <p class="muted">${state.dashboard.user.unlimitedAnnualLeave ? "Unlimited balance" : `${summary.available} days available`}</p>
-        </div>
-      </article>
-      <article class="employee-ring-card">
-        <div class="employee-ring" style="--value: ${medicalPercent}%; --ring-gradient: #5ee8d6, #5d7cfa;">
-          <strong>${medicalPercent}%</strong>
-        </div>
-        <div>
-          <h2>Medical Leave</h2>
-          <p class="muted">${medicalSummary.available} / ${medicalSummary.entitlement} days remaining</p>
-        </div>
-      </article>
+      ${leaveBalanceCard("Annual Leave", summary, "#ff5fc8, #5d7cfa", state.dashboard.user.unlimitedAnnualLeave)}
+      ${leaveBalanceCard("Medical Leave", medicalSummary, "#5ee8d6, #5d7cfa")}
       <article class="employee-ring-card">
         <div class="employee-ring" style="--value: ${claimPercent}%; --ring-gradient: #ffbd3d, #ff7b68;">
           <strong>${claimPercent}%</strong>
@@ -1609,7 +1602,7 @@ function renderEmployeeRecentRequests() {
   `;
 }
 
-function featureRingCard({ title, value, text, percent, gradient }) {
+function featureRingCard({ title, value, text, percent, gradient, headline }) {
   return `
     <article class="feature-ring-card">
       <div class="feature-ring" style="--value: ${percent}%; --ring-gradient: ${gradient};">
@@ -1617,6 +1610,7 @@ function featureRingCard({ title, value, text, percent, gradient }) {
       </div>
       <div>
         <h2>${escapeHtml(title)}</h2>
+        ${headline ? `<strong class="leave-balance-headline">${escapeHtml(headline)}</strong>` : ""}
         <p class="muted">${escapeHtml(text)}</p>
       </div>
     </article>
@@ -1632,30 +1626,17 @@ function renderLeavePageRings() {
     approved: 0
   };
   const isUnlimited = Boolean(state.dashboard.user.unlimitedAnnualLeave);
-  const annualPercent = isUnlimited ? 100 : percentage(summary.available, summary.entitlement);
   const pendingPercent = isUnlimited ? 0 : percentage(summary.pending, summary.entitlement || summary.pending);
-  const medicalPercent = percentage(medicalSummary.available, medicalSummary.entitlement);
 
   return `
     <section class="feature-balance-grid">
+      ${leaveBalanceCard("Annual Leave", summary, "#ff5fc8, #5d7cfa", isUnlimited)}
+      ${leaveBalanceCard("Medical Leave", medicalSummary, "#5ee8d6, #5d7cfa")}
       ${featureRingCard({
-        title: "Annual Leave",
-        value: isUnlimited ? "Open" : `${annualPercent}%`,
-        text: isUnlimited ? "Unlimited annual leave" : `${summary.available} days available`,
-        percent: annualPercent,
-        gradient: "#ff5fc8, #5d7cfa"
-      })}
-      ${featureRingCard({
-        title: "Medical Leave",
-        value: `${medicalPercent}%`,
-        text: `${medicalSummary.available} / ${medicalSummary.entitlement} days remaining`,
-        percent: medicalPercent,
-        gradient: "#5ee8d6, #5d7cfa"
-      })}
-      ${featureRingCard({
-        title: "Leave Pending",
+        title: "Annual Leave Requests",
         value: String(summary.pending),
-        text: `${summary.approved} days approved this year`,
+        headline: `${daysLabel(summary.pending)} pending`,
+        text: `${daysLabel(summary.approved)} approved this year`,
         percent: pendingPercent,
         gradient: "#ffbd3d, #ff7b68"
       })}
@@ -1722,10 +1703,10 @@ function renderEmployeeEntitlementSummaries() {
               <article class="employee-entitlement-item">
                 <div class="employee-entitlement-heading"><strong>${type}</strong><span>Expires by award</span></div>
                 ${renderEmployeeEntitlementFacts([
-                  ["Available", displayNumber(summary.available)],
-                  ["Pending", displayNumber(summary.pending)],
-                  ["Remaining", displayNumber(summary.unreserved)],
-                  ["Next expiry", summary.nextExpiry ? dateText(summary.nextExpiry) : "None"]
+                  ["Available to book", daysLabel(summary.unreserved)],
+                  ["Reserved (pending)", daysLabel(summary.pending)],
+                  ["Credit left, including reserved", daysLabel(summary.available)],
+                  ["Last day to use next credit", summary.nextExpiry ? lastUsableDate(summary.nextExpiry) : "None"]
                 ])}
               </article>
             `;
