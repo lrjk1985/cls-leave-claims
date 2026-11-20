@@ -3396,7 +3396,7 @@ function renderAccount() {
 function renderTeamCalendar() {
   renderShell(`${renderTopbar("Team Calendar", "Approved team absences")}
     <section class="team-calendar" aria-labelledby="calendar-month">
-      <header class="calendar-bar"><h2 id="calendar-month" aria-live="polite"></h2>
+      <header class="calendar-bar"><div><h2 id="calendar-month" aria-live="polite"></h2><span class="muted" role="status"></span></div>
         <div class="actions"><button class="button small" data-month="-1" aria-label="Previous month" title="Previous month">&#8249;</button>
         <button class="button small" data-month="today">Today</button>
         <button class="button small" data-month="1" aria-label="Next month" title="Next month">&#8250;</button></div>
@@ -3406,15 +3406,24 @@ function renderTeamCalendar() {
   const body = panel.querySelector(".calendar-body");
   let month = todayIso().slice(0, 7);
   let version = 0;
-  async function load() {
-    const current = ++version;
-    const first = new Date(month + "-01T12:00:00Z");
-    const format = (date, options) => date.toLocaleDateString("en-SG", { ...options, timeZone: "UTC" });
-    panel.querySelector("h2").textContent = format(first, { month: "long", year: "numeric" });
-    body.innerHTML = renderLoadingState("Loading calendar");
-    try {
-      const entries = await api("/api/team-calendar?month=" + month);
-      if (current !== version || !panel.isConnected) return;
+  const cache = new Map(), pending = new Map();
+  const monthDate = value => new Date(value + "-01T12:00:00Z");
+  const format = (date, options) => date.toLocaleDateString("en-SG", { ...options, timeZone: "UTC" });
+  function shifted(value, delta) {
+    const d = monthDate(value);
+    d.setUTCMonth(d.getUTCMonth() + delta);
+    return d.toISOString().slice(0, 7);
+  }
+  function read(key) {
+    if (!pending.has(key)) {
+      pending.set(key, api("/api/team-calendar?month=" + key).then(entries => {
+        if (panel.isConnected && [month, shifted(month, -1), shifted(month, 1)].includes(key)) cache.set(key, entries);
+        return entries;
+      }).finally(() => pending.delete(key)));
+    }
+    return pending.get(key);
+  }
+  function draw(first, entries, loading = false) {
       const cells = [];
       const paddingCell = '<li class="cal-pad" aria-hidden="true"></li>';
       for (let i = 0; i < (first.getUTCDay() + 6) % 7; i++) cells.push(paddingCell);
@@ -3431,9 +3440,29 @@ function renderTeamCalendar() {
       while (cells.length % 7) cells.push(paddingCell);
       body.innerHTML = `<div class="cal-week" aria-hidden="true">${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(s => "<span>" + s + "</span>").join("")}</div>
         <ol class="cal-days" aria-label="Team availability">${cells.join("")}</ol>
-        ${entries.length ? "" : '<p class="empty">No approved absences this month.</p>'}`;
+        ${entries.length || loading ? "" : '<p class="empty">No approved absences this month.</p>'}`;
+  }
+  async function load() {
+    const current = ++version, selected = month, first = monthDate(selected);
+    const neighbors = [shifted(selected, 1), shifted(selected, -1)];
+    for (const key of cache.keys()) if (key !== selected && !neighbors.includes(key)) cache.delete(key);
+    const cached = cache.get(selected);
+    const status = panel.querySelector('[role="status"]');
+    panel.querySelector("h2").textContent = format(first, { month: "long", year: "numeric" });
+    status.textContent = cached ? "" : "Loading absences…";
+    draw(first, cached || [], !cached);
+    try {
+      const entries = await read(selected);
+      if (current !== version || !panel.isConnected) return;
+      status.textContent = "";
+      if (!cached || JSON.stringify(cached) !== JSON.stringify(entries)) draw(first, entries);
+      for (const key of neighbors) {
+        if (!cache.has(key)) read(key).catch(() => {}); // Retry on selection if a preload fails.
+      }
     } catch {
       if (current !== version || !panel.isConnected) return;
+      cache.clear();
+      status.textContent = "";
       body.innerHTML = '<p class="empty">The calendar could not be loaded. <button class="button small" data-month="retry">Retry</button></p>';
     }
   }
@@ -3443,9 +3472,7 @@ function renderTeamCalendar() {
     const move = button.dataset.month;
     if (move === "today") month = todayIso().slice(0, 7);
     else if (move !== "retry") {
-      const d = new Date(month + "-01T12:00:00Z");
-      d.setUTCMonth(d.getUTCMonth() + Number(move));
-      month = d.toISOString().slice(0, 7);
+      month = shifted(month, Number(move));
     }
     load();
   };
