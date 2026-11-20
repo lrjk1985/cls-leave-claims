@@ -1,11 +1,16 @@
 const { getSingaporePublicHolidaysForRange } = require("./publicHolidays");
 
-async function teamCalendar(db, month, holidaysForRange = getSingaporePublicHolidaysForRange) {
+function calendarMonthBounds(month) {
   if (!/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(month || "")) throw new Error("Choose a valid calendar month.");
   const [year, number] = month.split("-").map(Number);
   const first = month + "-01";
   const length = new Date(Date.UTC(year, number, 0)).getUTCDate();
   const last = month + "-" + length;
+  return { year, number, first, last, length };
+}
+
+async function teamCalendar(db, month, holidaysForRange = getSingaporePublicHolidaysForRange) {
+  const { year, number, first, last, length } = calendarMonthBounds(month);
   const bookings = db.leaveRequests.filter(r => r.status === "approved" && r.startDate <= last && r.endDate >= first);
   const names = new Map(db.users.map(u => [u.id, u.name]));
   // Legacy breakdowns marked weekends before checking holidays. A weekend worker
@@ -31,4 +36,4 @@ async function teamCalendar(db, month, holidaysForRange = getSingaporePublicHoli
   return entries.sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name) || a.portion.localeCompare(b.portion));
 }
 
-module.exports = { teamCalendar };
+module.exports = { teamCalendar, calendarMonthBounds };

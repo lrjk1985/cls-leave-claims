@@ -1,5 +1,5 @@
 const crypto = require("node:crypto");
-const { teamCalendar } = require("./src/teamCalendar");
+const { teamCalendar, calendarMonthBounds } = require("./src/teamCalendar");
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
@@ -4550,10 +4550,33 @@ async function decideClaim(db, reviewer, claimId, body) {
   return claim;
 }
 
+async function readSupabaseTeamCalendar(req, month, read = supabaseRequest) {
+  const token = parseCookies(req).cls_session;
+  const unauthorized = () => Object.assign(new Error("Please sign in again."), { status: 401 });
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) throw unauthorized();
+  const { first } = calendarMonthBounds(month);
+  const response = await read("/rest/v1/rpc/cls_team_calendar_month", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ p_token: token, p_first: first })
+  });
+  const rows = await response.json();
+  if (rows === null) throw unauthorized();
+  const users = new Map();
+  const leaveRequests = rows.map(row => {
+    users.set(row.employee_id, { id: row.employee_id, name: row.name });
+    return leaveRequestFromRow({ ...row, status: "approved" });
+  });
+  return teamCalendar({ users: [...users.values()], leaveRequests }, month);
+}
+
 async function handleApi(req, res, pathname) {
-  const db = await loadDb();
   const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const searchParams = requestUrl.searchParams;
+  if (req.method === "GET" && pathname === "/api/team-calendar" && isSupabaseEnabled() && !useSupabaseLegacyState()) {
+    res.setHeader("Cache-Control", "private, no-store");
+    return jsonResponse(res, 200, { data: await readSupabaseTeamCalendar(req, searchParams.get("month")) });
+  }
+  const db = await loadDb();
   const body = await readRequestBody(req);
 
   if (req.method === "POST" && pathname === "/api/login") {
@@ -5259,6 +5282,7 @@ module.exports = {
     prepareLeaveRequest,
     createOffInLieuAward,
     dashboard,
+    readSupabaseTeamCalendar,
     decideLeaveRequest,
     deliverQueuedEmails,
     ensureAnnualSpecialLeaveEntitlements,
