@@ -46,14 +46,16 @@
 .cal-week { border-top:1px solid var(--line); color:var(--muted); }
 .cal-week span,.cal-day { padding:8px; }
 .cal-day,.cal-pad { border-top:1px solid var(--line); border-inline-end:1px solid var(--line); min-height:90px; }
-.cal-day time { font-weight:600; }
-.cal-day time[aria-current] { color:var(--primary-dark); text-decoration:underline; }
+.cal-pad { background:var(--grey-2); }
+.cal-day time { display:inline-grid; place-items:center; min-width:26px; height:26px; font-weight:600; }
+.cal-day time[aria-current="date"] { background:var(--primary-dark); color:var(--paper); border-radius:50%; }
 .cal-entry { background:var(--primary-soft); border-left:2px solid var(--primary); margin-top:5px; padding:4px 6px; overflow-wrap:anywhere; }
 .cal-entry span { display:block; font-size:12px; }
 .cal-mobile { display:none; }
 @media(max-width:720px) {
   .cal-week,.cal-pad,.cal-day:not(.occupied),.cal-number { display:none; }
   .cal-mobile { display:inline; }
+  .cal-day time[aria-current="date"] { border-radius:4px; padding-inline:6px; }
   .cal-days { display:block; }
   .cal-day { min-height:0; padding:10px 14px; border-right:none; }
   .cal-entry { display:flex; align-items:center; justify-content:space-between; gap:8px; }

@@ -3416,7 +3416,8 @@ function renderTeamCalendar() {
       const entries = await api("/api/team-calendar?month=" + month);
       if (current !== version || !panel.isConnected) return;
       const cells = [];
-      for (let i = 0; i < (first.getUTCDay() + 6) % 7; i++) cells.push('<li class="cal-pad" aria-hidden="true"></li>');
+      const paddingCell = '<li class="cal-pad" aria-hidden="true"></li>';
+      for (let i = 0; i < (first.getUTCDay() + 6) % 7; i++) cells.push(paddingCell);
       const today = todayIso();
       for (const d = new Date(first); d.getUTCMonth() === first.getUTCMonth(); d.setUTCDate(d.getUTCDate() + 1)) {
         const date = d.toISOString().slice(0, 10);
@@ -3424,9 +3425,10 @@ function renderTeamCalendar() {
         const label = format(d, { weekday: "short", day: "numeric", month: "short" });
         cells.push(`<li class="cal-day${absences.length ? " occupied" : ""}">
           <time datetime="${date}" aria-label="${label}" ${date === today ? 'aria-current="date"' : ""}>
-          <span class="cal-number">${d.getUTCDate()}</span><span class="cal-mobile">${label}</span></time>
+          <span class="cal-number">${d.getUTCDate()}</span><span class="cal-mobile">${date === today && absences.length ? "Today &middot; " : ""}${label}</span></time>
           ${absences.map(e => `<div class="cal-entry"><strong>${escapeHtml(e.name)}</strong><span>${escapeHtml(e.portion)}</span></div>`).join("")}</li>`);
       }
+      while (cells.length % 7) cells.push(paddingCell);
       body.innerHTML = `<div class="cal-week" aria-hidden="true">${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(s => "<span>" + s + "</span>").join("")}</div>
         <ol class="cal-days" aria-label="Team availability">${cells.join("")}</ol>
         ${entries.length ? "" : '<p class="empty">No approved absences this month.</p>'}`;
